@@ -1,9 +1,4 @@
-import { useMemo } from "react";
-import { useApp } from "../store";
-import type { TriggerItem } from "../types";
 import { CashPoorFeed, LienFeed, MaturityFeed, PermitFeed } from "./Feeds";
-import { pct } from "../lib/format";
-import { IconBookmark, IconChevronRight } from "./icons";
 
 export function MaturityView() {
   return <MaturityFeed full />;
@@ -16,72 +11,6 @@ export function PermitView() {
 }
 export function LienView() {
   return <LienFeed full />;
-}
-
-/* ----------------------------- watchlist ----------------------------- */
-
-export function WatchlistView() {
-  const watchlist = useApp((s) => s.watchlist);
-  const feeds = useApp((s) => s.feeds);
-  const openResume = useApp((s) => s.openResume);
-  const toggleWatch = useApp((s) => s.toggleWatch);
-
-  // Unique watched entities, with their strongest live signal
-  const entities = useMemo(() => {
-    const map = new Map<string, TriggerItem>();
-    Object.values(feeds)
-      .flat()
-      .forEach((t) => {
-        if (!watchlist.includes(t.entity.id)) return;
-        const prev = map.get(t.entity.id);
-        if (!prev || t.score > prev.score) map.set(t.entity.id, t);
-      });
-    return [...map.values()].sort((a, b) => b.score - a.score);
-  }, [feeds, watchlist]);
-
-  if (entities.length === 0) {
-    return (
-      <div className="card flex flex-col items-center justify-center gap-2 py-20 text-center">
-        <IconBookmark className="h-6 w-6 text-tx3" />
-        <p className="text-sm text-tx2">Nothing watched yet.</p>
-        <p className="max-w-xs text-xs text-tx3">
-          Bookmark a borrower from any feed and they'll surface here with their strongest live
-          signal.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="card overflow-hidden">
-      {entities.map((item) => (
-        <button
-          key={item.entity.id}
-          onClick={() => openResume(item.entity.id, item)}
-          className="group flex w-full items-center gap-4 border-t border-line px-4 py-3.5 text-left transition-colors first:border-0 hover:bg-raised/60 sm:px-5"
-        >
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-medium text-tx1">{item.entity.name}</div>
-            <div className="mt-0.5 truncate text-2xs text-tx3">
-              {item.entity.flips36mo} flips · {pct(item.entity.avgMarginPct)} margin — {item.headline}
-            </div>
-          </div>
-          <span className="text-sm font-semibold tabular-nums text-tx1">{item.score}</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleWatch(item.entity.id);
-            }}
-            className="rounded-lg p-1.5 text-violet hover:bg-raised"
-            title="Remove from watchlist"
-          >
-            <IconBookmark className="h-3.5 w-3.5" />
-          </button>
-          <IconChevronRight className="h-4 w-4 text-tx3 transition-transform group-hover:translate-x-0.5" />
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /* ------------------------------ settings ------------------------------ */

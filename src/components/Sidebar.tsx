@@ -2,7 +2,6 @@ import { useApp, useVisibleFeed, type View } from "../store";
 import { classNames } from "../lib/format";
 import {
   IconAlert,
-  IconBookmark,
   IconCash,
   IconClock,
   IconCollapse,
@@ -10,6 +9,7 @@ import {
   IconGear,
   IconGrid,
   IconHammer,
+  IconKanban,
   IconRadar,
   IconX,
   type IconType,
@@ -27,13 +27,15 @@ const NAV: NavItem[] = [
   { view: "cash_poor", label: "Cash-Poor", icon: IconCash },
   { view: "permit", label: "Permits", icon: IconHammer },
   { view: "lien", label: "Lien Alerts", icon: IconAlert },
-  { view: "watchlist", label: "Watchlist", icon: IconBookmark },
+  { view: "watchlist", label: "Pipeline", icon: IconKanban },
 ];
 
 function NavButton({ item, expanded }: { item: NavItem; expanded: boolean }) {
   const view = useApp((s) => s.view);
   const setView = useApp((s) => s.setView);
-  const watchCount = useApp((s) => s.watchlist.length);
+  const watchCount = useApp((s) =>
+    Object.values(s.pipeline).filter((l) => l.stage !== "funded" && l.stage !== "lost").length
+  );
   const lienCount = useVisibleFeed("lien").filter((t) => t.urgency === "critical").length;
   const active = view === item.view;
   const Icon = item.icon;

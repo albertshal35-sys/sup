@@ -320,6 +320,30 @@ export const mockResumes: Record<string, BorrowerResume> = {
 
 /** Fallback resume synthesized from any feed row when a full one isn't seeded. */
 export function synthesizeResume(item: TriggerItem): BorrowerResume {
+  // Recover the borrower's recorded notes from any maturity signal on the same
+  // entity, so Cost of Capital (rates paid) renders for every prospect.
+  const loans: BorrowerResume["loans"] = mockMaturities
+    .filter((m) => m.entity.id === item.entity.id)
+    .map((m, i) => ({
+      id: `syn-${m.id}-${i}`,
+      lenderName: String(m.payload.lender),
+      lenderType: "hard_money",
+      principal: Number(m.payload.principal),
+      ratePct: Number(m.payload.rate),
+      originatedAt: daysFromNow(Number(m.payload.daysToMaturity) - 365),
+      maturityDate: daysFromNow(Number(m.payload.daysToMaturity)),
+      status: "active",
+      address: m.property?.address ?? "",
+    }));
+
+  const signals = [
+    ...new Map(
+      [item, ...mockMaturities, ...mockCashPoor, ...mockPermits, ...mockLiens]
+        .filter((t) => t.entity.id === item.entity.id)
+        .map((t) => [t.id, { kind: t.kind, headline: t.headline, score: t.score }])
+    ).values(),
+  ].sort((a, b) => b.score - a.score);
+
   return {
     entity: resumeBase(entities.sunbelt, {
       ...item.entity,
@@ -335,7 +359,7 @@ export function synthesizeResume(item: TriggerItem): BorrowerResume {
         }]
       : [],
     transactions: [],
-    loans: [],
-    activeSignals: [{ kind: item.kind, headline: item.headline, score: item.score }],
+    loans,
+    activeSignals: signals,
   };
 }

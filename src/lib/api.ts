@@ -4,7 +4,7 @@
  * `wrangler dev`). Every consumer gets the same shapes either way.
  */
 
-import type { BorrowerResume, IngestionRun, Kpis, TriggerItem, TriggerKind } from "../types";
+import type { BorrowerResume, IngestionRun, Kpis, Lead, TriggerItem, TriggerKind } from "../types";
 import {
   mockCashPoor,
   mockIngestion,
@@ -111,6 +111,38 @@ export async function getResume(entityId: string, fallbackItem?: TriggerItem): P
   if (seeded) return seeded;
   if (fallbackItem) return synthesizeResume(fallbackItem);
   return null;
+}
+
+/* ------------------------------ CRM sync ------------------------------ */
+/* Local pipeline state is source of truth for the demo; these mirror it to
+   the Worker best-effort so multi-device state works once deployed. */
+
+const DEMO_USER = "usr_01";
+
+export async function syncLeadUpsert(lead: Lead): Promise<void> {
+  try {
+    await fetch("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: DEMO_USER,
+        entityId: lead.entityId,
+        stage: lead.stage,
+        note: lead.note,
+        followUp: lead.followUp,
+      }),
+    });
+  } catch {
+    /* offline demo */
+  }
+}
+
+export async function syncLeadRemove(entityId: string): Promise<void> {
+  try {
+    await fetch(`/api/watchlist/${entityId}?userId=${DEMO_USER}`, { method: "DELETE" });
+  } catch {
+    /* offline demo */
+  }
 }
 
 export async function setTriggerStatus(id: string, status: string): Promise<void> {

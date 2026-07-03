@@ -24,7 +24,9 @@ context, direct contact actions.
 2. **Cash-Poor Trigger** — entities with **≥2 all-cash purchases recorded in the last 60 days**: prime delayed-financing candidates needing to replenish liquidity. Show total cash deployed, buy count, window length.
 3. **Automated Borrower Resume** — per-prospect modal stitching **36 months of transactions**: total flips, estimated gross margins, average hold/days-on-market, volume, full debt stack, active signals, and skip-traced contact channels with match confidence.
 4. **Permit-to-Social Matching** — feed of large **ground-up / structural permits** (≥$250K valuation) filed in the last 30 days, linked to the registered LLC and the principal's skip-traced phone/email/LinkedIn.
-5. **Contractor Lien Monitoring** — alert feed for **fresh mechanics liens** (≤21 days): a frozen construction draw signals need for rescue capital. Critical urgency when the same entity also carries a maturing note.
+5. **Pipeline CRM** — save any prospect as a lead and manage it through a five-stage kanban (Watching → Outreach → Term Sheet → Funded / Lost) with per-lead notes, next-follow-up dates (overdue flagged), an activity trail (calls, emails, stage moves), and summary rollups (active leads, est. active value, follow-ups due).
+6. **Cost-of-Capital Rate Intel** — in every borrower resume, show the rates the borrower has historically paid (last / average / highest, active principal) and merge loan originations into the 36-month transaction timeline with a Rate column, so the lender can price to win ("they took 15% — I can offer 13%").
+7. **Contractor Lien Monitoring** — alert feed for **fresh mechanics liens** (≤21 days): a frozen construction draw signals need for rescue capital. Critical urgency when the same entity also carries a maturing note.
 
 ## Data pipeline (hardened, reliable)
 

@@ -1,7 +1,24 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { BorrowerResume, IngestionRun, Kpis, TriggerItem, TriggerKind } from "./types";
-import { getFeed, getIngestionStatus, getKpis, getResume, setTriggerStatus } from "./lib/api";
+import type {
+  BorrowerResume,
+  IngestionRun,
+  Kpis,
+  Lead,
+  LeadActivity,
+  PipelineStage,
+  TriggerItem,
+  TriggerKind,
+} from "./types";
+import {
+  getFeed,
+  getIngestionStatus,
+  getKpis,
+  getResume,
+  setTriggerStatus,
+  syncLeadRemove,
+  syncLeadUpsert,
+} from "./lib/api";
 
 export type View =
   | "dashboard"
@@ -28,7 +45,8 @@ interface AppState {
   resume: BorrowerResume | null;
   resumeOpen: boolean;
 
-  watchlist: string[]; // entity ids (persisted)
+  /** CRM: saved leads keyed by entity id (persisted) */
+  pipeline: Record<string, Lead>;
   dismissed: string[]; // trigger ids (persisted)
 
   setView: (v: View) => void;
@@ -38,7 +56,13 @@ interface AppState {
   loadAll: () => Promise<void>;
   openResume: (entityId: string, fromItem?: TriggerItem) => Promise<void>;
   closeResume: () => void;
-  toggleWatch: (entityId: string) => void;
+
+  toggleWatch: (entityId: string, entityName?: string) => void;
+  setLeadStage: (entityId: string, stage: PipelineStage) => void;
+  setLeadNote: (entityId: string, note: string) => void;
+  setLeadFollowUp: (entityId: string, date: string | null) => void;
+  logLeadActivity: (entityId: string, kind: LeadActivity["kind"], text: string) => void;
+
   dismissTrigger: (id: string) => void;
   markContacted: (id: string) => void;
 }
@@ -49,6 +73,34 @@ const emptyFeeds: Record<TriggerKind, TriggerItem[]> = {
   permit: [],
   lien: [],
 };
+
+export const STAGES: { id: PipelineStage; label: string }[] = [
+  { id: "watching", label: "Watching" },
+  { id: "outreach", label: "Outreach" },
+  { id: "term_sheet", label: "Term Sheet" },
+  { id: "funded", label: "Funded" },
+  { id: "lost", label: "Lost" },
+];
+
+function newLead(entityId: string, entityName: string): Lead {
+  const now = new Date().toISOString();
+  return {
+    entityId,
+    entityName,
+    stage: "watching",
+    note: "",
+    followUp: null,
+    addedAt: now,
+    activities: [{ ts: now, kind: "added", text: "Saved to pipeline" }],
+  };
+}
+
+function withActivity(lead: Lead, kind: LeadActivity["kind"], text: string): Lead {
+  return {
+    ...lead,
+    activities: [{ ts: new Date().toISOString(), kind, text }, ...lead.activities].slice(0, 50),
+  };
+}
 
 export const useApp = create<AppState>()(
   persist(
@@ -66,7 +118,7 @@ export const useApp = create<AppState>()(
       resume: null,
       resumeOpen: false,
 
-      watchlist: [],
+      pipeline: {},
       dismissed: [],
 
       setView: (view) => set({ view, mobileNavOpen: false }),
@@ -102,13 +154,53 @@ export const useApp = create<AppState>()(
       },
       closeResume: () => set({ resumeOpen: false }),
 
-      toggleWatch: (entityId) => {
-        const { watchlist } = get();
-        set({
-          watchlist: watchlist.includes(entityId)
-            ? watchlist.filter((id) => id !== entityId)
-            : [...watchlist, entityId],
-        });
+      toggleWatch: (entityId, entityName) => {
+        const { pipeline } = get();
+        if (pipeline[entityId]) {
+          const next = { ...pipeline };
+          delete next[entityId];
+          set({ pipeline: next });
+          void syncLeadRemove(entityId);
+        } else {
+          const lead = newLead(entityId, entityName ?? entityId);
+          set({ pipeline: { ...pipeline, [entityId]: lead } });
+          void syncLeadUpsert(lead);
+        }
+      },
+
+      setLeadStage: (entityId, stage) => {
+        const lead = get().pipeline[entityId];
+        if (!lead || lead.stage === stage) return;
+        const label = STAGES.find((s) => s.id === stage)?.label ?? stage;
+        const next = withActivity({ ...lead, stage }, "stage", `Moved to ${label}`);
+        set({ pipeline: { ...get().pipeline, [entityId]: next } });
+        void syncLeadUpsert(next);
+      },
+
+      setLeadNote: (entityId, note) => {
+        const lead = get().pipeline[entityId];
+        if (!lead || lead.note === note) return;
+        const next = withActivity({ ...lead, note }, "note", "Note updated");
+        set({ pipeline: { ...get().pipeline, [entityId]: next } });
+        void syncLeadUpsert(next);
+      },
+
+      setLeadFollowUp: (entityId, date) => {
+        const lead = get().pipeline[entityId];
+        if (!lead || lead.followUp === date) return;
+        const next = withActivity(
+          { ...lead, followUp: date },
+          "follow_up",
+          date ? `Follow-up set for ${date}` : "Follow-up cleared"
+        );
+        set({ pipeline: { ...get().pipeline, [entityId]: next } });
+        void syncLeadUpsert(next);
+      },
+
+      logLeadActivity: (entityId, kind, text) => {
+        const lead = get().pipeline[entityId];
+        if (!lead) return;
+        set({ pipeline: { ...get().pipeline, [entityId]: withActivity(lead, kind, text) } });
       },
 
       dismissTrigger: (id) => {
@@ -127,12 +219,24 @@ export const useApp = create<AppState>()(
     }),
     {
       name: "lienwolf-ui",
+      version: 1,
       partialize: (s) => ({
-        watchlist: s.watchlist,
+        pipeline: s.pipeline,
         dismissed: s.dismissed,
         collapsed: s.collapsed,
         theme: s.theme,
       }),
+      migrate: (persisted, version) => {
+        // v0 stored `watchlist: string[]` — promote to full pipeline leads.
+        const state = persisted as Record<string, unknown>;
+        if (version === 0 && Array.isArray(state.watchlist)) {
+          state.pipeline = Object.fromEntries(
+            (state.watchlist as string[]).map((id) => [id, newLead(id, id)])
+          );
+          delete state.watchlist;
+        }
+        return state as never;
+      },
       onRehydrateStorage: () => (state) => {
         if (state) applyTheme(state.theme);
       },
@@ -150,4 +254,16 @@ export function useVisibleFeed(kind: TriggerKind): TriggerItem[] {
   const feed = useApp((s) => s.feeds[kind]);
   const dismissed = useApp((s) => s.dismissed);
   return feed.filter((t) => !dismissed.includes(t.id));
+}
+
+/** The strongest live trigger per saved entity — used to enrich board cards. */
+export function useBestSignal(entityId: string): TriggerItem | null {
+  const feeds = useApp((s) => s.feeds);
+  let best: TriggerItem | null = null;
+  Object.values(feeds)
+    .flat()
+    .forEach((t) => {
+      if (t.entity.id === entityId && (!best || t.score > best.score)) best = t;
+    });
+  return best;
 }

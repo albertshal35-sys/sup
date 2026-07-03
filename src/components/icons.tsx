@@ -11,7 +11,9 @@ import {
   Bookmark,
   Building2,
   CalendarClock,
+  CalendarDays,
   Check,
+  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Hammer,
@@ -22,9 +24,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Phone,
+  Plus,
   Radar,
   Search,
   Settings,
+  SquareKanban,
   Sun,
   X,
   type LucideProps,
@@ -56,5 +60,9 @@ export const IconExternal = tune(ExternalLink);
 export const IconCheck = tune(Check);
 export const IconSun = tune(Sun);
 export const IconMoon = tune(Moon);
+export const IconChevronLeft = tune(ChevronLeft);
+export const IconKanban = tune(SquareKanban);
+export const IconCalendar = tune(CalendarDays);
+export const IconPlus = tune(Plus);
 export const IconCollapse = tune(PanelLeftClose);
 export const IconExpand = tune(PanelLeftOpen);

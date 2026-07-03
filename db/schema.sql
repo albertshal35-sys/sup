@@ -188,14 +188,29 @@ CREATE INDEX IF NOT EXISTS idx_triggers_detected ON triggers(detected_at DESC);
 -- Per-user watchlist / pipeline
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS watchlist (
+  id             TEXT PRIMARY KEY,
+  user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entity_id      TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  note           TEXT,
+  stage          TEXT NOT NULL DEFAULT 'watching' CHECK (stage IN ('watching','outreach','term_sheet','funded','lost')),
+  follow_up_date TEXT,                             -- next scheduled touch
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (user_id, entity_id)
+);
+
+-- ------------------------------------------------------------
+-- CRM activity trail per lead (calls, emails, stage moves, notes)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lead_events (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  note       TEXT,
-  stage      TEXT NOT NULL DEFAULT 'watching' CHECK (stage IN ('watching','outreach','term_sheet','funded','lost')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (user_id, entity_id)
+  kind       TEXT NOT NULL CHECK (kind IN ('added','stage','note','call','email','follow_up')),
+  text       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_lead_events ON lead_events(user_id, entity_id, created_at DESC);
 
 -- ------------------------------------------------------------
 -- Hardened ingestion audit log: one row per connector per run.

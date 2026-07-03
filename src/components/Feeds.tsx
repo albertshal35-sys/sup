@@ -9,15 +9,25 @@ import { IconAlert, IconBookmark, IconCash, IconClock, IconHammer, IconMail, Ico
 function RowActions({ item }: { item: TriggerItem }) {
   const toggleWatch = useApp((s) => s.toggleWatch);
   const dismissTrigger = useApp((s) => s.dismissTrigger);
-  const watchlist = useApp((s) => s.watchlist);
-  const watched = watchlist.includes(item.entity.id);
+  const markContacted = useApp((s) => s.markContacted);
+  const logLeadActivity = useApp((s) => s.logLeadActivity);
+  const watched = useApp((s) => Boolean(s.pipeline[item.entity.id]));
+
+  // outbound touches update trigger status + the lead's activity trail
+  const logTouch = (kind: "call" | "email", detail: string) => {
+    markContacted(item.id);
+    logLeadActivity(item.entity.id, kind, detail);
+  };
 
   return (
     <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
       {item.contact?.phone && (
         <a
           href={`tel:${item.contact.phone}`}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            logTouch("call", `Called ${item.contact!.phone}`);
+          }}
           title={`Call ${item.contact.phone}`}
           className="rounded-lg p-1.5 text-tx3 hover:bg-raised hover:text-ok"
         >
@@ -27,7 +37,10 @@ function RowActions({ item }: { item: TriggerItem }) {
       {item.contact?.email && (
         <a
           href={`mailto:${item.contact.email}`}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            logTouch("email", `Emailed ${item.contact!.email}`);
+          }}
           title={`Email ${item.contact.email}`}
           className="rounded-lg p-1.5 text-tx3 hover:bg-raised hover:text-accent"
         >
@@ -37,9 +50,9 @@ function RowActions({ item }: { item: TriggerItem }) {
       <button
         onClick={(e) => {
           e.stopPropagation();
-          toggleWatch(item.entity.id);
+          toggleWatch(item.entity.id, item.entity.name);
         }}
-        title={watched ? "Remove from watchlist" : "Add to watchlist"}
+        title={watched ? "Remove from pipeline" : "Save lead to pipeline"}
         className={classNames(
           "rounded-lg p-1.5 hover:bg-raised",
           watched ? "text-violet" : "text-tx3 hover:text-violet"

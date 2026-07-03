@@ -11,8 +11,8 @@ import {
   MaturityView,
   PermitView,
   SettingsView,
-  WatchlistView,
 } from "./components/Views";
+import { PipelineView } from "./components/Pipeline";
 
 export default function App() {
   const view = useApp((s) => s.view);
@@ -35,7 +35,7 @@ export default function App() {
           {view === "cash_poor" && <CashPoorView />}
           {view === "permit" && <PermitView />}
           {view === "lien" && <LienView />}
-          {view === "watchlist" && <WatchlistView />}
+          {view === "watchlist" && <PipelineView />}
           {view === "settings" && <SettingsView />}
         </main>
       </div>

@@ -11,9 +11,10 @@ need capital.
 | --- | --- |
 | **Upcoming Maturity Sniffer** | Active private/hard-money notes originated **8–10 months ago** → refi window opening |
 | **Cash-Poor Trigger** | ≥2 **all-cash purchases in 60 days** → delayed-financing candidates rebuilding liquidity |
-| **Automated Borrower Resume** | 36-month transaction stitch: flips, margins, hold time, debt stack, skip-traced contacts |
+| **Automated Borrower Resume** | 36-month deed + financing timeline, flips, margins, hold time, **cost-of-capital rate intel** (last/avg/highest rate paid — quote below it to win), skip-traced contacts |
 | **Permit-to-Social Matching** | Ground-up/structural permits ≥$250K, matched to registered LLC + principal contact info |
 | **Contractor Lien Monitoring** | Fresh mechanics liens (≤21 days) → frozen draws, rescue-capital opportunities |
+| **Pipeline CRM** | Five-stage lead board (Watching → Outreach → Term Sheet → Funded/Lost) with notes, follow-up dates, activity trail, and deal-size rollups |
 
 ## Stack
 

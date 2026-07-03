@@ -1,8 +1,200 @@
-import { useEffect } from "react";
-import { useApp } from "../store";
+import { useEffect, useState } from "react";
+import type { BorrowerResume as BorrowerResumeType } from "../types";
+import { STAGES, useApp } from "../store";
 import { ago, classNames, money, moneyFull, pct, shortDate } from "../lib/format";
-import { IconBookmark, IconBuilding, IconExternal, IconMail, IconPhone, IconX } from "./icons";
+import {
+  IconBookmark,
+  IconBuilding,
+  IconExternal,
+  IconMail,
+  IconPhone,
+  IconPlus,
+  IconX,
+} from "./icons";
 import { UrgencyPill } from "./primitives";
+
+/* ------------------------- CRM panel ------------------------- */
+
+function CrmPanel({ entityId, entityName }: { entityId: string; entityName: string }) {
+  const lead = useApp((s) => s.pipeline[entityId]);
+  const toggleWatch = useApp((s) => s.toggleWatch);
+  const setLeadStage = useApp((s) => s.setLeadStage);
+  const setLeadNote = useApp((s) => s.setLeadNote);
+  const setLeadFollowUp = useApp((s) => s.setLeadFollowUp);
+  const [draftNote, setDraftNote] = useState(lead?.note ?? "");
+
+  useEffect(() => setDraftNote(lead?.note ?? ""), [lead?.note, entityId]);
+
+  if (!lead) {
+    return (
+      <section className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-dashed border-line px-3.5 py-3">
+        <p className="text-xs text-tx3">
+          Not in your pipeline yet — save to track outreach, notes and follow-ups.
+        </p>
+        <button
+          onClick={() => toggleWatch(entityId, entityName)}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+        >
+          <IconPlus className="h-3.5 w-3.5" /> Save lead
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-5 rounded-xl border border-line bg-raised/60 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-2xs font-medium uppercase tracking-widest text-tx3">Pipeline</h3>
+        <span className="text-2xs text-tx3">saved {ago(lead.addedAt)}</span>
+      </div>
+
+      {/* Stage selector */}
+      <div className="mt-2.5 flex flex-wrap gap-1">
+        {STAGES.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setLeadStage(entityId, s.id)}
+            className={classNames(
+              "rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors",
+              lead.stage === s.id
+                ? "border-accent/40 bg-accent/15 text-accent"
+                : "border-line bg-surface text-tx2 hover:text-tx1"
+            )}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Follow-up + note */}
+      <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-[170px_1fr]">
+        <label className="flex flex-col gap-1">
+          <span className="text-2xs font-medium text-tx3">Next follow-up</span>
+          <input
+            type="date"
+            value={lead.followUp ?? ""}
+            onChange={(e) => setLeadFollowUp(entityId, e.target.value || null)}
+            className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs tabular-nums text-tx1 focus:border-accent/40 focus:outline-none"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-2xs font-medium text-tx3">Notes</span>
+          <textarea
+            rows={2}
+            value={draftNote}
+            onChange={(e) => setDraftNote(e.target.value)}
+            onBlur={() => setLeadNote(entityId, draftNote)}
+            placeholder="Terms discussed, docs requested, objections…"
+            className="resize-none rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs text-tx1 placeholder:text-tx3 focus:border-accent/40 focus:outline-none"
+          />
+        </label>
+      </div>
+
+      {/* Activity trail */}
+      {lead.activities.length > 0 && (
+        <ol className="mt-3 flex flex-col gap-1 border-t border-line pt-2.5">
+          {lead.activities.slice(0, 4).map((a, i) => (
+            <li key={i} className="flex items-baseline gap-2 text-2xs">
+              <span className="w-14 shrink-0 tabular-nums text-tx3">{ago(a.ts)}</span>
+              <span className="text-tx2">{a.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/* --------------------- rate intelligence --------------------- */
+/* What has this borrower historically paid for money? The lender's
+   pricing edge: quote under their demonstrated cost of capital. */
+
+function RateIntel({ loans }: { loans: BorrowerResumeType["loans"] }) {
+  const rated = loans.filter((l) => l.ratePct != null);
+  if (rated.length === 0) return null;
+
+  const sorted = [...rated].sort((a, b) => b.originatedAt.localeCompare(a.originatedAt));
+  const last = sorted[0];
+  const avg = rated.reduce((s, l) => s + (l.ratePct ?? 0), 0) / rated.length;
+  const high = Math.max(...rated.map((l) => l.ratePct ?? 0));
+  const activeDebt = loans
+    .filter((l) => l.status === "active")
+    .reduce((s, l) => s + l.principal, 0);
+
+  return (
+    <section className="mt-5">
+      <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
+        Cost of Capital
+      </h3>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <Stat
+          label="Last rate paid"
+          value={`${last.ratePct!.toFixed(2)}%`}
+          sub={`${last.lenderName} · ${shortDate(last.originatedAt)}`}
+        />
+        <Stat label="Avg rate" value={`${avg.toFixed(2)}%`} sub={`across ${rated.length} notes`} />
+        <Stat label="Highest paid" value={`${high.toFixed(2)}%`} sub="rate ceiling" />
+        <Stat
+          label="Active debt"
+          value={activeDebt > 0 ? money(activeDebt) : "—"}
+          sub="open principal"
+        />
+      </div>
+      <p className="mt-2 flex items-start gap-1.5 rounded-xl border border-accent/20 bg-accent/[0.06] px-3.5 py-2.5 text-xs text-tx2">
+        <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+        <span>
+          Pricing edge: they last borrowed at{" "}
+          <strong className="font-semibold tabular-nums text-tx1">{last.ratePct!.toFixed(2)}%</strong> — any
+          quote below that undercuts their demonstrated cost of capital
+          {avg > (last.ratePct ?? 0) &&
+            ` (and they've paid up to ${high.toFixed(2)}% before)`}
+          .
+        </span>
+      </p>
+    </section>
+  );
+}
+
+interface TimelineRow {
+  key: string;
+  date: string;
+  kind: "purchase" | "sale" | "loan";
+  detail: string;
+  amount: number;
+  ratePct: number | null;
+  isCash: boolean;
+}
+
+/** Merge deeds and loan originations into one descending timeline (36mo). */
+function buildTimeline(resume: BorrowerResumeType): TimelineRow[] {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 36);
+  const cutoffIso = cutoff.toISOString().slice(0, 10);
+
+  const deeds: TimelineRow[] = resume.transactions.map((t) => ({
+    key: `tx-${t.id}`,
+    date: t.recordedAt,
+    kind: t.side,
+    detail: `${t.address}, ${t.city}`,
+    amount: t.price,
+    ratePct: null,
+    isCash: t.isCash,
+  }));
+
+  const notes: TimelineRow[] = resume.loans
+    .filter((l) => l.originatedAt >= cutoffIso)
+    .map((l) => ({
+      key: `loan-${l.id}`,
+      date: l.originatedAt,
+      kind: "loan" as const,
+      detail: `${l.lenderName} — ${l.address}`,
+      amount: l.principal,
+      ratePct: l.ratePct,
+      isCash: false,
+    }));
+
+  return [...deeds, ...notes].sort((a, b) => b.date.localeCompare(a.date));
+}
 
 function VelocityRing({ score }: { score: number }) {
   const r = 26;
@@ -40,7 +232,7 @@ export function BorrowerResumeModal() {
   const open = useApp((s) => s.resumeOpen);
   const close = useApp((s) => s.closeResume);
   const toggleWatch = useApp((s) => s.toggleWatch);
-  const watchlist = useApp((s) => s.watchlist);
+  const pipeline = useApp((s) => s.pipeline);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
@@ -50,7 +242,7 @@ export function BorrowerResumeModal() {
 
   if (!open || !resume) return null;
   const e = resume.entity;
-  const watched = watchlist.includes(e.id);
+  const watched = Boolean(pipeline[e.id]);
   const primary = resume.contacts[0];
 
   return (
@@ -113,8 +305,8 @@ export function BorrowerResumeModal() {
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => toggleWatch(e.id)}
-              title={watched ? "Remove from watchlist" : "Add to watchlist"}
+              onClick={() => toggleWatch(e.id, e.name)}
+              title={watched ? "Remove from pipeline" : "Save lead to pipeline"}
               className={classNames(
                 "rounded-xl p-2 transition-colors hover:bg-raised",
                 watched ? "text-violet" : "text-tx2"
@@ -146,6 +338,8 @@ export function BorrowerResumeModal() {
             <Stat label="Volume · 36mo" value={money(e.volume36mo)} sub="bought + sold" />
           </div>
 
+          <CrmPanel entityId={e.id} entityName={e.name} />
+
           {/* Active signals */}
           {resume.activeSignals.length > 0 && (
             <section className="mt-5">
@@ -166,61 +360,73 @@ export function BorrowerResumeModal() {
             </section>
           )}
 
-          {/* Transaction timeline */}
+          <RateIntel loans={resume.loans} />
+
+          {/* Transaction + financing timeline */}
           <section className="mt-5">
             <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
-              Transaction History · 36 months
+              Transaction &amp; Financing History · 36 months
             </h3>
-            {resume.transactions.length === 0 ? (
-              <p className="rounded-xl border border-line bg-raised/60 px-3.5 py-3 text-xs text-tx3">
-                Full county history loads once the record pipeline links this entity's deeds.
-              </p>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-line">
-                <table className="w-full min-w-[480px]">
-                  <thead>
-                    <tr className="border-b border-line bg-raised/60 text-2xs uppercase tracking-wider text-tx3">
-                      <th className="px-3.5 py-2 text-left font-medium">Date</th>
-                      <th className="px-3 py-2 text-left font-medium">Side</th>
-                      <th className="px-3 py-2 text-left font-medium">Property</th>
-                      <th className="px-3.5 py-2 text-right font-medium">Price</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {resume.transactions.map((t) => (
-                      <tr key={t.id} className="border-b border-line last:border-0">
-                        <td className="whitespace-nowrap px-3.5 py-2 text-xs tabular-nums text-tx2">
-                          {shortDate(t.recordedAt)}
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={classNames(
-                              "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
-                              t.side === "purchase"
-                                ? "bg-violet/10 text-violet"
-                                : "bg-ok/10 text-ok"
-                            )}
-                          >
-                            {t.side === "purchase" ? "Buy" : "Sell"}
-                          </span>
-                          {t.isCash && (
-                            <span className="ml-1.5 text-2xs text-warn" title="All-cash">
-                              cash
-                            </span>
-                          )}
-                        </td>
-                        <td className="max-w-[220px] truncate px-3 py-2 text-xs text-tx2">
-                          {t.address}, {t.city}
-                        </td>
-                        <td className="num px-3.5 py-2 text-xs font-medium text-tx1">
-                          {moneyFull(t.price)}
-                        </td>
+            {(() => {
+              const rows = buildTimeline(resume);
+              if (rows.length === 0) {
+                return (
+                  <p className="rounded-xl border border-line bg-raised/60 px-3.5 py-3 text-xs text-tx3">
+                    Full county history loads once the record pipeline links this entity's deeds.
+                  </p>
+                );
+              }
+              return (
+                <div className="overflow-x-auto rounded-xl border border-line">
+                  <table className="w-full min-w-[540px]">
+                    <thead>
+                      <tr className="border-b border-line bg-raised/60 text-2xs uppercase tracking-wider text-tx3">
+                        <th className="px-3.5 py-2 text-left font-medium">Date</th>
+                        <th className="px-3 py-2 text-left font-medium">Event</th>
+                        <th className="px-3 py-2 text-left font-medium">Detail</th>
+                        <th className="px-3 py-2 text-right font-medium">Rate</th>
+                        <th className="px-3.5 py-2 text-right font-medium">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody>
+                      {rows.map((r) => (
+                        <tr key={r.key} className="border-b border-line last:border-0">
+                          <td className="whitespace-nowrap px-3.5 py-2 text-xs tabular-nums text-tx2">
+                            {shortDate(r.date)}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            <span
+                              className={classNames(
+                                "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
+                                r.kind === "purchase" && "bg-violet/10 text-violet",
+                                r.kind === "sale" && "bg-ok/10 text-ok",
+                                r.kind === "loan" && "bg-warn/10 text-warn"
+                              )}
+                            >
+                              {r.kind === "purchase" ? "Buy" : r.kind === "sale" ? "Sell" : "Loan"}
+                            </span>
+                            {r.isCash && (
+                              <span className="ml-1.5 text-2xs text-warn" title="All-cash">
+                                cash
+                              </span>
+                            )}
+                          </td>
+                          <td className="max-w-[240px] truncate px-3 py-2 text-xs text-tx2">
+                            {r.detail}
+                          </td>
+                          <td className="num px-3 py-2 font-mono text-xs text-tx1">
+                            {r.ratePct != null ? `${r.ratePct.toFixed(2)}%` : "—"}
+                          </td>
+                          <td className="num px-3.5 py-2 text-xs font-medium text-tx1">
+                            {moneyFull(r.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </section>
 
           {/* Loan history */}

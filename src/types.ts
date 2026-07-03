@@ -104,6 +104,26 @@ export interface BorrowerResume {
   activeSignals: { kind: TriggerKind; headline: string; score: number }[];
 }
 
+/* ------------------------------ CRM ------------------------------ */
+
+export type PipelineStage = "watching" | "outreach" | "term_sheet" | "funded" | "lost";
+
+export interface LeadActivity {
+  ts: string; // ISO datetime
+  kind: "added" | "stage" | "note" | "call" | "email" | "follow_up";
+  text: string;
+}
+
+export interface Lead {
+  entityId: string;
+  entityName: string; // snapshot at save time so the board renders independently of feeds
+  stage: PipelineStage;
+  note: string;
+  followUp: string | null; // ISO date
+  addedAt: string;
+  activities: LeadActivity[];
+}
+
 export interface IngestionRun {
   connector: string;
   status: "ok" | "partial" | "failed" | "running";

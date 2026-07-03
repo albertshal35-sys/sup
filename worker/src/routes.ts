@@ -170,17 +170,67 @@ route("GET", "/api/borrowers/:id/resume", async (_req, env, params) => {
 
 /* --------------------------- watchlist --------------------------- */
 
+const STAGES = ["watching", "outreach", "term_sheet", "funded", "lost"];
+
+route("GET", "/api/watchlist", async (_req, env, _params, url) => {
+  const userId = url.searchParams.get("userId");
+  if (!userId) return json({ error: "missing_user" }, env, 400);
+  const rows = await env.DB.prepare(
+    `SELECT w.entity_id, w.stage, w.note, w.follow_up_date, w.created_at, w.updated_at,
+            e.name AS entity_name, e.velocity_score
+     FROM watchlist w JOIN entities e ON e.id = w.entity_id
+     WHERE w.user_id = ?1 ORDER BY w.updated_at DESC`
+  )
+    .bind(userId)
+    .all();
+  return json({ leads: rows.results }, env);
+});
+
+// Upsert a lead: create on first save, update stage/note/follow-up after.
 route("POST", "/api/watchlist", async (req, env) => {
   const body = (await req.json().catch(() => ({}))) as {
     userId?: string;
     entityId?: string;
+    stage?: string;
     note?: string;
+    followUp?: string | null;
   };
   if (!body.userId || !body.entityId) return json({ error: "missing_fields" }, env, 400);
+  const stage = body.stage && STAGES.includes(body.stage) ? body.stage : "watching";
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO watchlist (id, user_id, entity_id, note) VALUES (?1, ?2, ?3, ?4)"
+    `INSERT INTO watchlist (id, user_id, entity_id, stage, note, follow_up_date)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+     ON CONFLICT (user_id, entity_id) DO UPDATE SET
+       stage = excluded.stage, note = excluded.note,
+       follow_up_date = excluded.follow_up_date, updated_at = datetime('now')`
   )
-    .bind(crypto.randomUUID(), body.userId, body.entityId, body.note ?? null)
+    .bind(
+      crypto.randomUUID(),
+      body.userId,
+      body.entityId,
+      stage,
+      body.note ?? null,
+      body.followUp ?? null
+    )
+    .run();
+  return json({ ok: true }, env, 201);
+});
+
+// Append a CRM activity event (call, email, stage move, note edit).
+route("POST", "/api/watchlist/:entityId/events", async (req, env, params) => {
+  const body = (await req.json().catch(() => ({}))) as {
+    userId?: string;
+    kind?: string;
+    text?: string;
+  };
+  const kinds = ["added", "stage", "note", "call", "email", "follow_up"];
+  if (!body.userId || !body.kind || !kinds.includes(body.kind)) {
+    return json({ error: "invalid_event" }, env, 400);
+  }
+  await env.DB.prepare(
+    "INSERT INTO lead_events (id, user_id, entity_id, kind, text) VALUES (?1, ?2, ?3, ?4, ?5)"
+  )
+    .bind(crypto.randomUUID(), body.userId, params.entityId, body.kind, body.text ?? "")
     .run();
   return json({ ok: true }, env, 201);
 });
