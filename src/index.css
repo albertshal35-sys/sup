@@ -10,7 +10,7 @@
     --bg: 11 12 15; /* #0b0c0f */
     --surface: 19 20 24; /* #131418 */
     --raised: 28 30 35; /* #1c1e23 */
-    --line: 39 41 47; /* #27292f */
+    --line: 34 36 41; /* #222429 — subtle hairline */
     --tx1: 237 238 240; /* #edeef0 */
     --tx2: 155 161 168; /* #9ba1a8 */
     --tx3: 104 110 118; /* #686e76 */
@@ -52,6 +52,13 @@
 
   ::selection {
     background: rgb(var(--accent) / 0.25);
+  }
+
+  /* Keyboard focus: visible but quiet */
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.55);
+    outline-offset: 2px;
+    border-radius: 6px;
   }
 
   /* Slim scrollbars */

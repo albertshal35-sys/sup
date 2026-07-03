@@ -48,7 +48,7 @@ export function PipelineCard() {
             </span>
             <span
               className={classNames(
-                "w-12 text-right text-2xs font-medium uppercase",
+                "w-12 text-right text-2xs font-medium capitalize",
                 r.status === "ok"
                   ? "text-ok/80"
                   : r.status === "partial"

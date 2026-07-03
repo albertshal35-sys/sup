@@ -44,7 +44,7 @@ function CrmPanel({ entityId, entityName }: { entityId: string; entityName: stri
   return (
     <section className="mt-5 rounded-xl border border-line bg-raised/60 p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-2xs font-medium uppercase tracking-widest text-tx3">Pipeline</h3>
+        <h3 className="text-2xs font-medium text-tx3">Pipeline</h3>
         <span className="text-2xs text-tx3">saved {ago(lead.addedAt)}</span>
       </div>
 
@@ -123,7 +123,7 @@ function RateIntel({ loans }: { loans: BorrowerResumeType["loans"] }) {
 
   return (
     <section className="mt-5">
-      <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
+      <h3 className="mb-2 text-2xs font-medium text-tx3">
         Cost of Capital
       </h3>
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
@@ -211,7 +211,7 @@ function VelocityRing({ score }: { score: number }) {
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className="font-display text-base font-bold tabular-nums text-tx1">{score}</span>
-        <span className="text-[9px] uppercase tracking-wider text-tx3">velocity</span>
+        <span className="text-[9px] text-tx3">velocity</span>
       </div>
     </div>
   );
@@ -220,7 +220,7 @@ function VelocityRing({ score }: { score: number }) {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-xl border border-line bg-raised/60 px-3.5 py-3">
-      <div className="text-2xs font-medium uppercase tracking-wider text-tx3">{label}</div>
+      <div className="text-2xs font-medium text-tx3">{label}</div>
       <div className="mt-1 font-display text-lg font-bold tabular-nums tracking-tight text-tx1">{value}</div>
       {sub && <div className="mt-0.5 text-2xs text-tx3">{sub}</div>}
     </div>
@@ -256,7 +256,7 @@ export function BorrowerResumeModal() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-display text-lg font-bold tracking-tight text-tx1">{e.name}</h2>
-              <span className="rounded-md border border-line bg-raised/60 px-1.5 py-0.5 text-2xs uppercase tracking-wide text-tx2">
+              <span className="rounded-md border border-line bg-raised/60 px-1.5 py-0.5 text-2xs capitalize text-tx2">
                 {e.kind === "llc" ? "LLC" : e.kind}
               </span>
             </div>
@@ -343,7 +343,7 @@ export function BorrowerResumeModal() {
           {/* Active signals */}
           {resume.activeSignals.length > 0 && (
             <section className="mt-5">
-              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
+              <h3 className="mb-2 text-2xs font-medium text-tx3">
                 Active Signals
               </h3>
               <div className="flex flex-col gap-1.5">
@@ -364,7 +364,7 @@ export function BorrowerResumeModal() {
 
           {/* Transaction + financing timeline */}
           <section className="mt-5">
-            <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
+            <h3 className="mb-2 text-2xs font-medium text-tx3">
               Transaction &amp; Financing History · 36 months
             </h3>
             {(() => {
@@ -380,7 +380,7 @@ export function BorrowerResumeModal() {
                 <div className="overflow-x-auto rounded-xl border border-line">
                   <table className="w-full min-w-[540px]">
                     <thead>
-                      <tr className="border-b border-line bg-raised/60 text-2xs uppercase tracking-wider text-tx3">
+                      <tr className="border-b border-line bg-raised/60 text-2xs text-tx3">
                         <th className="px-3.5 py-2 text-left font-medium">Date</th>
                         <th className="px-3 py-2 text-left font-medium">Event</th>
                         <th className="px-3 py-2 text-left font-medium">Detail</th>
@@ -397,7 +397,7 @@ export function BorrowerResumeModal() {
                           <td className="whitespace-nowrap px-3 py-2">
                             <span
                               className={classNames(
-                                "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
+                                "rounded-md px-1.5 py-0.5 text-2xs font-medium capitalize",
                                 r.kind === "purchase" && "bg-violet/10 text-violet",
                                 r.kind === "sale" && "bg-ok/10 text-ok",
                                 r.kind === "loan" && "bg-warn/10 text-warn"
@@ -432,7 +432,7 @@ export function BorrowerResumeModal() {
           {/* Loan history */}
           {resume.loans.length > 0 && (
             <section className="mt-5">
-              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
+              <h3 className="mb-2 text-2xs font-medium text-tx3">
                 Debt Stack
               </h3>
               <div className="flex flex-col gap-1.5">
@@ -458,7 +458,7 @@ export function BorrowerResumeModal() {
                     </span>
                     <span
                       className={classNames(
-                        "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
+                        "rounded-md px-1.5 py-0.5 text-2xs font-medium capitalize",
                         l.status === "active"
                           ? "bg-warn/10 text-warn"
                           : "bg-raised text-tx2"

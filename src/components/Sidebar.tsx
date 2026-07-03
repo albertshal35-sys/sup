@@ -112,7 +112,7 @@ function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollap
       {/* Nav */}
       <nav className="flex flex-1 flex-col gap-1 px-2">
         {expanded && (
-          <div className="px-3 pb-1.5 text-2xs font-medium uppercase tracking-widest text-tx3">
+          <div className="px-3 pb-1.5 text-2xs font-medium text-tx3">
             Signal Feeds
           </div>
         )}

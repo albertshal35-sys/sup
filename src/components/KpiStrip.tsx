@@ -64,14 +64,14 @@ export function KpiStrip() {
       {KPIS.map((def, i) => (
         <div
           key={def.id}
-          className="card card-hover animate-fade-up px-4 py-3.5"
+          className="card animate-fade-up px-4 py-3.5"
           style={{ animationDelay: `${i * 40}ms` }}
         >
           {kpis ? (
             <>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-2xs font-medium uppercase tracking-wider text-tx3">
+                  <div className="truncate text-2xs font-medium text-tx3">
                     {def.label}
                   </div>
                   <div className="mt-1 font-display text-2xl font-bold tabular-nums tracking-tight text-tx1">

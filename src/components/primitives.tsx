@@ -12,7 +12,7 @@ export function UrgencyPill({ urgency }: { urgency: Urgency }) {
   return (
     <span
       className={classNames(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium uppercase tracking-wide",
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium capitalize",
         styles[urgency]
       )}
     >
@@ -93,11 +93,11 @@ export function Countdown({ days }: { days: number }) {
     <span
       title={`Note matures ~${maturesOn} (${days} days)`}
       className={classNames(
-        "inline-flex rounded-md border px-1.5 py-0.5 font-mono text-2xs font-semibold tabular-nums",
+        "inline-flex whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-2xs font-semibold tabular-nums",
         tone
       )}
     >
-      D-{days}
+      {`D-${days}`}
     </span>
   );
 }

@@ -192,7 +192,7 @@ export function PipelineView() {
           },
         ].map((s) => (
           <div key={s.label} className="card px-4 py-3">
-            <div className="truncate text-2xs font-medium uppercase tracking-wider text-tx3">
+            <div className="truncate text-2xs font-medium text-tx3">
               {s.label}
             </div>
             <div

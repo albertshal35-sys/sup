@@ -115,7 +115,7 @@ export function MaturityFeed({ full = false }: { full?: boolean }) {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] border-collapse">
           <thead>
-            <tr className="border-y border-line text-2xs uppercase tracking-wider text-tx3">
+            <tr className="border-y border-line text-2xs text-tx3">
               <th className="px-4 py-2 text-left font-medium sm:px-5">Borrower</th>
               <th className="px-3 py-2 text-left font-medium">Property</th>
               <th className="px-3 py-2 text-right font-medium">Principal</th>
@@ -248,7 +248,7 @@ export function PermitFeed({ full = false }: { full?: boolean }) {
             <div className="flex items-center justify-between gap-2">
               <span
                 className={classNames(
-                  "rounded-md border px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide",
+                  "rounded-md border px-1.5 py-0.5 text-2xs font-medium",
                   item.payload.permitType === "ground_up"
                     ? "border-violet/30 bg-violet/10 text-violet"
                     : "border-accent/30 bg-accent/10 text-accent"

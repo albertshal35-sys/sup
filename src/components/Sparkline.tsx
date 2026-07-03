@@ -7,7 +7,7 @@ import { useState } from "react";
  * (works with mouse and touch via pointer events).
  */
 
-const W = 96;
+const W = 84;
 const H = 28;
 
 export function Sparkline({
