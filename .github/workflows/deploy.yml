@@ -1,0 +1,50 @@
+name: Deploy
+
+# On every merge to main: build the frontend, apply pending D1 migrations,
+# then deploy the single Worker (API + static assets) — in that order, so
+# new code never runs against an old schema.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   (Workers Scripts:Edit + D1:Edit permissions)
+#   CLOUDFLARE_ACCOUNT_ID
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check worker
+        run: npx tsc -p worker/tsconfig.json
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply lienwolf-db --config worker/wrangler.toml --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Worker (API + static assets)
+        run: npx wrangler deploy --config worker/wrangler.toml
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

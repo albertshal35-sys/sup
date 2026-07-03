@@ -4,7 +4,7 @@
  * relative to "now" so trigger windows always look live.
  */
 
-import type { BorrowerResume, IngestionRun, Kpis, TriggerItem } from "../types";
+import type { BorrowerNetwork, BorrowerResume, IngestionRun, Kpis, TriggerItem } from "../types";
 import { daysFromNow } from "../lib/format";
 
 const entities = {
@@ -227,6 +227,48 @@ export const mockIngestion: IngestionRun[] = [
   { connector: "scoring", status: "ok", finishedAt: daysFromNow(0), rowsIngested: 18, attempts: 1 },
 ];
 
+/* --------------------- borrower network (cross-LLC) --------------------- */
+/* Principals frequently operate several LLCs; the network graph is how a
+   lender learns the customer, not just the entity on today's deed. */
+
+const PRINCIPAL_LINKS: Record<string, { principal: string; entityIds: string[] }> = {
+  "Marcus Delgado": { principal: "Marcus Delgado", entityIds: ["ent_01", "ent_04"] },
+  "Priya Raman": { principal: "Priya Raman", entityIds: ["ent_02", "ent_07"] },
+  "Tom Kowalski": { principal: "Tom Kowalski", entityIds: ["ent_05", "ent_09"] },
+};
+
+const NETWORK_STATS: Record<string, { volume36mo: number }> = {
+  ent_01: { volume36mo: 6_840_000 }, ent_02: { volume36mo: 9_120_000 },
+  ent_04: { volume36mo: 3_380_000 }, ent_05: { volume36mo: 11_260_000 },
+  ent_07: { volume36mo: 7_450_000 }, ent_09: { volume36mo: 2_140_000 },
+};
+
+const EXTRA_ENTITIES: Record<string, { id: string; name: string; kind: "llc"; flips36mo: number; velocityScore: number }> = {
+  ent_09: { id: "ent_09", name: "Palmetto Ridge Ventures LLC", kind: "llc", flips36mo: 4, velocityScore: 58 },
+};
+
+export function networkFor(entityId: string): BorrowerNetwork | null {
+  const link = Object.values(PRINCIPAL_LINKS).find((l) => l.entityIds.includes(entityId));
+  if (!link) return null;
+  const others = link.entityIds
+    .filter((id) => id !== entityId)
+    .map((id) => {
+      const known = Object.values(entities).find((e) => e.id === id) ?? EXTRA_ENTITIES[id];
+      if (!known) return null;
+      return {
+        id: known.id,
+        name: known.name,
+        kind: known.kind,
+        flips36mo: known.flips36mo,
+        volume36mo: NETWORK_STATS[id]?.volume36mo ?? 0,
+        velocityScore: known.velocityScore,
+        role: "Managing member",
+      };
+    })
+    .filter((e): e is NonNullable<typeof e> => e != null);
+  return others.length ? { principalName: link.principal, entities: others } : null;
+}
+
 /* ------------------------- borrower resumes ------------------------- */
 
 const resumeBase = (
@@ -268,6 +310,7 @@ export const mockResumes: Record<string, BorrowerResume> = {
       { kind: "maturity", headline: "11.25% bridge in month 9 — $618K with Anchor Bridge", score: 86 },
       { kind: "lien", headline: "$23.4K plumbing lien (disputed)", score: 61 },
     ],
+    network: networkFor("ent_01"),
   },
   ent_02: {
     entity: resumeBase(entities.ironwood, {
@@ -292,6 +335,7 @@ export const mockResumes: Record<string, BorrowerResume> = {
       { kind: "permit", headline: "$2.35M ground-up 8-unit filed", score: 89 },
       { kind: "lien", headline: "$86.2K concrete lien on new 8-unit", score: 82 },
     ],
+    network: networkFor("ent_02"),
   },
   ent_05: {
     entity: resumeBase(entities.heron, {
@@ -315,6 +359,7 @@ export const mockResumes: Record<string, BorrowerResume> = {
       { kind: "cash_poor", headline: "$1.67M cash across 2 buys in 24 days", score: 85 },
       { kind: "permit", headline: "$1.64M 6-unit townhome cluster in review", score: 84 },
     ],
+    network: networkFor("ent_05"),
   },
 };
 
@@ -361,5 +406,6 @@ export function synthesizeResume(item: TriggerItem): BorrowerResume {
     transactions: [],
     loans,
     activeSignals: signals,
+    network: networkFor(item.entity.id),
   };
 }

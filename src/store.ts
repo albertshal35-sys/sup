@@ -14,6 +14,7 @@ import {
   getFeed,
   getIngestionStatus,
   getKpis,
+  getPublicSettings,
   getResume,
   setTriggerStatus,
   syncLeadRemove,
@@ -30,6 +31,7 @@ export type View =
   | "settings";
 
 export type Theme = "dark" | "light";
+export type DataMode = "demo" | "live" | "offline";
 
 interface AppState {
   view: View;
@@ -37,6 +39,9 @@ interface AppState {
   collapsed: boolean; // sidebar icon-rail mode (persisted)
   theme: Theme; // persisted + mirrored to <html data-theme>
   loading: boolean;
+  paletteOpen: boolean; // ⌘K command palette
+  dataMode: DataMode; // resolved from /api/settings on load
+  adminToken: string; // bearer for /api/admin/* (persisted)
 
   kpis: Kpis | null;
   feeds: Record<TriggerKind, TriggerItem[]>;
@@ -53,6 +58,9 @@ interface AppState {
   setMobileNav: (open: boolean) => void;
   toggleCollapsed: () => void;
   toggleTheme: () => void;
+  setPalette: (open: boolean) => void;
+  setDataMode: (m: DataMode) => void;
+  setAdminToken: (t: string) => void;
   loadAll: () => Promise<void>;
   openResume: (entityId: string, fromItem?: TriggerItem) => Promise<void>;
   closeResume: () => void;
@@ -61,6 +69,7 @@ interface AppState {
   setLeadStage: (entityId: string, stage: PipelineStage) => void;
   setLeadNote: (entityId: string, note: string) => void;
   setLeadFollowUp: (entityId: string, date: string | null) => void;
+  setLeadValue: (entityId: string, value: number | null) => void;
   logLeadActivity: (entityId: string, kind: LeadActivity["kind"], text: string) => void;
 
   dismissTrigger: (id: string) => void;
@@ -90,6 +99,7 @@ function newLead(entityId: string, entityName: string): Lead {
     stage: "watching",
     note: "",
     followUp: null,
+    dealValue: null,
     addedAt: now,
     activities: [{ ts: now, kind: "added", text: "Saved to pipeline" }],
   };
@@ -110,6 +120,9 @@ export const useApp = create<AppState>()(
       collapsed: false,
       theme: "dark",
       loading: true,
+      paletteOpen: false,
+      dataMode: "offline",
+      adminToken: "",
 
       kpis: null,
       feeds: emptyFeeds,
@@ -129,18 +142,26 @@ export const useApp = create<AppState>()(
         applyTheme(theme);
         set({ theme });
       },
+      setPalette: (paletteOpen) => set({ paletteOpen }),
+      setDataMode: (dataMode) => set({ dataMode }),
+      setAdminToken: (adminToken) => set({ adminToken }),
 
       loadAll: async () => {
         set({ loading: true });
+        // Resolve data mode first: live/demo when the Worker answers,
+        // offline (bundled demo data) when it does not.
+        const settings = await getPublicSettings();
+        const mode: DataMode = settings?.dataMode ?? "offline";
         const [kpis, maturity, cashPoor, permit, lien, ingestion] = await Promise.all([
-          getKpis(),
-          getFeed("maturity"),
-          getFeed("cash_poor"),
-          getFeed("permit"),
-          getFeed("lien"),
-          getIngestionStatus(),
+          getKpis(mode),
+          getFeed("maturity", mode),
+          getFeed("cash_poor", mode),
+          getFeed("permit", mode),
+          getFeed("lien", mode),
+          getIngestionStatus(mode),
         ]);
         set({
+          dataMode: mode,
           kpis,
           feeds: { maturity, cash_poor: cashPoor, permit, lien },
           ingestion,
@@ -197,6 +218,18 @@ export const useApp = create<AppState>()(
         void syncLeadUpsert(next);
       },
 
+      setLeadValue: (entityId, value) => {
+        const lead = get().pipeline[entityId];
+        if (!lead || lead.dealValue === value) return;
+        const next = withActivity(
+          { ...lead, dealValue: value },
+          "note",
+          value != null ? `Deal size set to $${value.toLocaleString("en-US")}` : "Deal size cleared"
+        );
+        set({ pipeline: { ...get().pipeline, [entityId]: next } });
+        void syncLeadUpsert(next);
+      },
+
       logLeadActivity: (entityId, kind, text) => {
         const lead = get().pipeline[entityId];
         if (!lead) return;
@@ -225,6 +258,7 @@ export const useApp = create<AppState>()(
         dismissed: s.dismissed,
         collapsed: s.collapsed,
         theme: s.theme,
+        adminToken: s.adminToken,
       }),
       migrate: (persisted, version) => {
         // v0 stored `watchlist: string[]` — promote to full pipeline leads.

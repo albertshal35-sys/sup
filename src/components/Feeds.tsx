@@ -95,8 +95,9 @@ function EntityCell({ item }: { item: TriggerItem }) {
 
 /* ---------------------- 1 — Upcoming Maturity feed ---------------------- */
 
-export function MaturityFeed({ full = false }: { full?: boolean }) {
-  const items = useVisibleFeed("maturity");
+export function MaturityFeed({ full = false, items: itemsProp }: { full?: boolean; items?: TriggerItem[] }) {
+  const visible = useVisibleFeed("maturity");
+  const items = itemsProp ?? visible;
   const openResume = useApp((s) => s.openResume);
   const rows = full ? items : items.slice(0, 6);
 
@@ -170,8 +171,9 @@ export function MaturityFeed({ full = false }: { full?: boolean }) {
 
 /* ------------------------- 2 — Cash-Poor feed ------------------------- */
 
-export function CashPoorFeed({ full = false }: { full?: boolean }) {
-  const items = useVisibleFeed("cash_poor");
+export function CashPoorFeed({ full = false, items: itemsProp }: { full?: boolean; items?: TriggerItem[] }) {
+  const visible = useVisibleFeed("cash_poor");
+  const items = itemsProp ?? visible;
   const openResume = useApp((s) => s.openResume);
   const rows = full ? items : items.slice(0, 3);
 
@@ -226,8 +228,9 @@ export function CashPoorFeed({ full = false }: { full?: boolean }) {
 
 /* ------------------- 3 — Permit-to-Social feed ------------------- */
 
-export function PermitFeed({ full = false }: { full?: boolean }) {
-  const items = useVisibleFeed("permit");
+export function PermitFeed({ full = false, items: itemsProp }: { full?: boolean; items?: TriggerItem[] }) {
+  const visible = useVisibleFeed("permit");
+  const items = itemsProp ?? visible;
   const openResume = useApp((s) => s.openResume);
   const rows = full ? items : items.slice(0, 4);
 
@@ -284,8 +287,9 @@ export function PermitFeed({ full = false }: { full?: boolean }) {
 
 /* -------------------- 4 — Contractor lien alerts -------------------- */
 
-export function LienFeed({ full = false }: { full?: boolean }) {
-  const items = useVisibleFeed("lien");
+export function LienFeed({ full = false, items: itemsProp }: { full?: boolean; items?: TriggerItem[] }) {
+  const visible = useVisibleFeed("lien");
+  const items = itemsProp ?? visible;
   const openResume = useApp((s) => s.openResume);
   const rows = full ? items : items.slice(0, 4);
 

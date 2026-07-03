@@ -4,7 +4,16 @@
  * `wrangler dev`). Every consumer gets the same shapes either way.
  */
 
-import type { BorrowerResume, IngestionRun, Kpis, Lead, TriggerItem, TriggerKind } from "../types";
+import type {
+  BorrowerResume,
+  ConnectorInfo,
+  IngestionRun,
+  Kpis,
+  Lead,
+  PublicSettings,
+  TriggerItem,
+  TriggerKind,
+} from "../types";
 import {
   mockCashPoor,
   mockIngestion,
@@ -81,25 +90,48 @@ const FEED_MOCKS: Record<TriggerKind, TriggerItem[]> = {
   lien: mockLiens,
 };
 
-export async function getFeed(kind: TriggerKind): Promise<TriggerItem[]> {
-  const live = await tryFetch<{ items: RawFeedRow[] }>(FEED_PATHS[kind]);
-  if (live && live.items.length > 0) return live.items.map(normalizeRow);
-  return FEED_MOCKS[kind];
+type Mode = "demo" | "live" | "offline";
+
+/** Public app settings from the Worker; null when unreachable (offline demo). */
+export async function getPublicSettings(): Promise<PublicSettings | null> {
+  return tryFetch<PublicSettings>("/settings");
 }
 
-export async function getKpis(): Promise<Kpis> {
+export async function getFeed(kind: TriggerKind, mode: Mode = "offline"): Promise<TriggerItem[]> {
+  if (mode === "offline") return FEED_MOCKS[kind];
+  const live = await tryFetch<{ items: RawFeedRow[] }>(FEED_PATHS[kind]);
+  if (live) return live.items.map(normalizeRow);
+  // API answered /settings but this call failed: demo keeps working, live shows truth
+  return mode === "demo" ? FEED_MOCKS[kind] : [];
+}
+
+export async function getKpis(mode: Mode = "offline"): Promise<Kpis> {
+  if (mode === "offline") return mockKpis;
   const live = await tryFetch<Omit<Kpis, "sparks" | "highVelocityFlippers">>("/kpis");
   if (live) return { ...mockKpis, ...live };
-  return mockKpis;
+  return mode === "demo"
+    ? mockKpis
+    : {
+        ...mockKpis,
+        newLeads: 0,
+        expiringLoans: { count: 0, principal: 0 },
+        cashPoorEntities: 0,
+        activeLiens: { count: 0, amount: 0 },
+        permitValuation30d: 0,
+        highVelocityFlippers: 0,
+      };
 }
 
-export async function getIngestionStatus(): Promise<IngestionRun[]> {
-  const live = await tryFetch<{ lastRuns: Array<{ connector: string; status: IngestionRun["status"]; finished_at: string; rows_ingested: number }> }>("/health");
-  if (live?.lastRuns?.length) {
-    return live.lastRuns.map((r) => ({
-      connector: r.connector, status: r.status, finishedAt: r.finished_at,
-      rowsIngested: r.rows_ingested, attempts: 1,
-    }));
+export async function getIngestionStatus(mode: Mode = "offline"): Promise<IngestionRun[]> {
+  if (mode !== "offline") {
+    const live = await tryFetch<{ lastRuns: Array<{ connector: string; status: IngestionRun["status"]; finished_at: string; rows_ingested: number }> }>("/health");
+    if (live?.lastRuns?.length) {
+      return live.lastRuns.map((r) => ({
+        connector: r.connector, status: r.status, finishedAt: r.finished_at,
+        rowsIngested: r.rows_ingested, attempts: 1,
+      }));
+    }
+    if (mode === "live") return [];
   }
   return mockIngestion;
 }
@@ -130,6 +162,7 @@ export async function syncLeadUpsert(lead: Lead): Promise<void> {
         stage: lead.stage,
         note: lead.note,
         followUp: lead.followUp,
+        dealValue: lead.dealValue,
       }),
     });
   } catch {
@@ -156,3 +189,51 @@ export async function setTriggerStatus(id: string, status: string): Promise<void
     /* offline demo — state persists client-side only */
   }
 }
+
+/* ------------------------------ admin API ------------------------------ */
+
+async function adminFetch<T>(
+  path: string,
+  token: string,
+  init?: RequestInit
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`/api/admin${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...init?.headers,
+      },
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) return { ok: false, error: String(body.error ?? res.status) };
+    return { ok: true, data: body as T };
+  } catch {
+    return { ok: false, error: "api_unreachable" };
+  }
+}
+
+export const admin = {
+  getConnectors: (token: string) =>
+    adminFetch<{ connectors: ConnectorInfo[] }>("/connectors", token),
+  saveConnector: (
+    token: string,
+    id: string,
+    patch: { enabled?: boolean; baseUrl?: string; apiKey?: string }
+  ) => adminFetch<{ ok: boolean }>(`/connectors/${id}`, token, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  }),
+  runConnector: (token: string, id: string) =>
+    adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, token, { method: "POST" }),
+  runAll: (token: string) =>
+    adminFetch<{ ok: boolean }>("/run-ingestion", token, { method: "POST" }),
+  saveSettings: (token: string, patch: { dataMode?: "demo" | "live"; markets?: string[] }) =>
+    adminFetch<{ ok: boolean }>("/settings", token, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  purgeDemo: (token: string) =>
+    adminFetch<{ ok: boolean; deleted: number }>("/purge-demo", token, { method: "POST" }),
+};

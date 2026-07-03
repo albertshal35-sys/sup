@@ -102,6 +102,7 @@ export interface BorrowerResume {
   transactions: ResumeTransaction[];
   loans: ResumeLoan[];
   activeSignals: { kind: TriggerKind; headline: string; score: number }[];
+  network?: BorrowerNetwork | null;
 }
 
 /* ------------------------------ CRM ------------------------------ */
@@ -120,8 +121,39 @@ export interface Lead {
   stage: PipelineStage;
   note: string;
   followUp: string | null; // ISO date
+  dealValue: number | null; // manual override; falls back to signal estimate
   addedAt: string;
   activities: LeadActivity[];
+}
+
+/** Another entity controlled by the same principal — the cross-LLC graph. */
+export interface NetworkEntity {
+  id: string;
+  name: string;
+  kind: "llc" | "individual" | "trust" | "corp";
+  flips36mo: number;
+  volume36mo: number;
+  velocityScore: number;
+  role: string | null;
+}
+
+export interface BorrowerNetwork {
+  principalName: string;
+  entities: NetworkEntity[];
+}
+
+export interface PublicSettings {
+  dataMode: "demo" | "live";
+  markets: string[];
+}
+
+export interface ConnectorInfo {
+  id: string;
+  label: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  apiKeyLast4: string | null;
+  lastRun: { status: string; finishedAt: string | null; rowsIngested: number } | null;
 }
 
 export interface IngestionRun {

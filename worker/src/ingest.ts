@@ -1,22 +1,40 @@
 /**
- * Hardened daily ingestion pipeline (cron: weekdays 11:00 UTC).
+ * Ingestion pipeline (cron: weekdays 11:00 UTC, or on demand via admin API).
  *
- * Design goals:
- *  - Each connector runs independently; one failing source never blocks the rest.
- *  - Exponential-backoff retries (3 attempts) around every vendor call.
- *  - Every run writes an audit row to ingestion_runs (status, counts, checksum)
- *    so reliability is observable from the dashboard.
- *  - Idempotent upserts keyed on (doc_number/permit_no + county) — re-running
- *    a day is safe.
- *  - Scoring is a separate, final stage that only runs against committed data.
+ * Production behavior:
+ *  - Connector config (enabled / base URL / encrypted API key) lives in D1
+ *    and is managed from the admin UI; env-var secrets act as fallback keys.
+ *  - Each connector pulls yesterday-forward records for the configured
+ *    coverage markets from its vendor, normalizes them into LienWolf's
+ *    schema, and upserts idempotently (doc/permit numbers are unique).
+ *  - Every run is retried up to 3× with backoff and audited in
+ *    ingestion_runs. One failing source never blocks the rest.
+ *  - Scoring is the final stage and only sees committed data.
  *
- * The vendor connectors below are production-shaped stubs: they define the
- * fetch/normalize/upsert contract and read API keys from env, but return
- * empty sets until real vendor credentials + endpoints are configured.
+ * Vendor payload contract (any vendor can be adapted to this shape, or
+ * a shim Worker can translate):
+ *   GET {base}/deeds?since=YYYY-MM-DD&markets=County,ST;County,ST
+ *     → [{ docNumber, apn, address, city, county, state, zip?, price,
+ *          isCash, deedType?, buyerName, sellerName, recordedAt }]
+ *   GET {base}/loans?since=…    → [{ docNumber, apn, address, city, county,
+ *          state, lenderName, lenderType?, principal, ratePct?,
+ *          originatedAt, termMonths?, maturityDate?, borrowerName }]
+ *   GET {base}/permits?since=…  → [{ permitNo, address, city, county, state,
+ *          permitType, description?, valuation, filedAt, status?,
+ *          contractor?, ownerName }]
+ *   GET {base}/liens?since=…    → [{ docNumber, address, city, county, state,
+ *          lienType?, claimant, amount, filedAt, ownerName }]
+ *   POST {base}/trace { names: string[] }
+ *     → [{ entityName, contactName, title?, phone?, email?, linkedin?,
+ *          confidence }]
  */
 
 import type { Env } from "./index";
+import { decryptSecret } from "./crypto";
 import { rescoreTriggers } from "./scoring";
+
+const MAX_ATTEMPTS = 3;
+const BACKOFF_MS = [0, 2000, 8000];
 
 interface ConnectorResult {
   ingested: number;
@@ -24,88 +42,313 @@ interface ConnectorResult {
   checksum: string | null;
 }
 
-type Connector = (env: Env) => Promise<ConnectorResult>;
-
-const MAX_ATTEMPTS = 3;
-const BACKOFF_MS = [0, 2000, 8000];
+interface ConnectorCfg {
+  id: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  apiKey: string | null;
+}
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
 }
 
-/** Fetch with timeout + non-2xx as error, so retries engage uniformly. */
 async function vendorFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 45_000);
   try {
     const res = await fetch(url, { ...init, signal: controller.signal });
-    if (!res.ok) throw new Error(`vendor ${res.status}: ${url}`);
+    if (!res.ok) throw new Error(`vendor ${res.status}: ${url.split("?")[0]}`);
     return await res.text();
   } finally {
     clearTimeout(timer);
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* Connectors — one per source. Swap stub bodies for real vendor APIs. */
-/* ------------------------------------------------------------------ */
+/* --------------------------- config access --------------------------- */
 
-const countyDeeds: Connector = async (env) => {
-  if (!env.COUNTY_API_KEY) return { ingested: 0, skipped: 0, checksum: null };
-  // Example contract:
-  //   const raw = await vendorFetch(`https://api.recorder-vendor.com/v2/deeds?since=yesterday`, {
-  //     headers: { Authorization: `Bearer ${env.COUNTY_API_KEY}` } });
-  //   normalize → INSERT OR IGNORE INTO transactions ... keyed on doc_number
-  const raw = "[]";
-  return { ingested: 0, skipped: 0, checksum: await sha256Hex(raw) };
+const ENV_KEY_FALLBACK: Record<string, keyof Env> = {
+  county_deeds: "COUNTY_API_KEY",
+  county_loans: "COUNTY_API_KEY",
+  permits: "PERMIT_API_KEY",
+  liens: "COUNTY_API_KEY",
+  skip_trace: "SKIP_TRACE_API_KEY",
 };
 
-const countyLoans: Connector = async (env) => {
-  if (!env.COUNTY_API_KEY) return { ingested: 0, skipped: 0, checksum: null };
-  // Deeds of trust / mortgages recorded yesterday → loans table.
-  // maturity_date = COALESCE(recorded, originated_at + term_months).
-  const raw = "[]";
-  return { ingested: 0, skipped: 0, checksum: await sha256Hex(raw) };
+export async function getConnectorConfig(env: Env, id: string): Promise<ConnectorCfg> {
+  const row = await env.DB.prepare(
+    "SELECT enabled, base_url, api_key_ct, api_key_iv FROM connector_config WHERE id = ?1"
+  )
+    .bind(id)
+    .first<{ enabled: number; base_url: string | null; api_key_ct: string | null; api_key_iv: string | null }>();
+
+  let apiKey: string | null = null;
+  if (row?.api_key_ct && row.api_key_iv && env.ADMIN_TOKEN) {
+    apiKey = await decryptSecret(env.ADMIN_TOKEN, row.api_key_ct, row.api_key_iv);
+  }
+  if (!apiKey) apiKey = (env[ENV_KEY_FALLBACK[id]] as string | undefined) ?? null;
+
+  return {
+    id,
+    enabled: Boolean(row?.enabled),
+    baseUrl: row?.base_url?.replace(/\/$/, "") ?? null,
+    apiKey,
+  };
+}
+
+async function getMarkets(env: Env): Promise<string[]> {
+  const row = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'markets'").first<{ value: string }>();
+  try {
+    return row ? (JSON.parse(row.value) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function sinceDate(): string {
+  const d = new Date(Date.now() - 2 * 86_400_000); // 2-day overlap; upserts dedupe
+  return d.toISOString().slice(0, 10);
+}
+
+function vendorUrl(cfg: ConnectorCfg, path: string, markets: string[]): string {
+  const params = new URLSearchParams({ since: sinceDate(), markets: markets.join(";") });
+  return `${cfg.baseUrl}/${path}?${params}`;
+}
+
+function authHeaders(cfg: ConnectorCfg): Record<string, string> {
+  return cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {};
+}
+
+/* ------------------------- entity/property resolution ------------------------- */
+
+const ENTITY_SUFFIX = /\b(LLC|L\.L\.C\.|LP|LLP|INC|CORP|TRUST|LTD)\b/i;
+
+function normalizeName(name: string): string {
+  return name.toUpperCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
+}
+
+async function resolveEntity(env: Env, rawName: string | null | undefined): Promise<string | null> {
+  if (!rawName) return null;
+  const name = normalizeName(rawName);
+  if (!name) return null;
+  const existing = await env.DB.prepare("SELECT id FROM entities WHERE name = ?1").bind(name).first<{ id: string }>();
+  if (existing) return existing.id;
+  const id = `ent_${crypto.randomUUID().slice(0, 12)}`;
+  const kind = ENTITY_SUFFIX.test(name) ? (/TRUST/.test(name) ? "trust" : "llc") : "individual";
+  await env.DB.prepare("INSERT INTO entities (id, kind, name, origin) VALUES (?1, ?2, ?3, 'live')")
+    .bind(id, kind, name)
+    .run();
+  return id;
+}
+
+interface AddressRec {
+  apn?: string | null;
+  address: string;
+  city: string;
+  county: string;
+  state: string;
+  zip?: string | null;
+}
+
+async function resolveProperty(env: Env, rec: AddressRec): Promise<string> {
+  if (rec.apn) {
+    const byApn = await env.DB.prepare(
+      "SELECT id FROM properties WHERE apn = ?1 AND county = ?2 AND state = ?3"
+    )
+      .bind(rec.apn, rec.county, rec.state)
+      .first<{ id: string }>();
+    if (byApn) return byApn.id;
+  }
+  const byAddr = await env.DB.prepare(
+    "SELECT id FROM properties WHERE address = ?1 AND city = ?2 AND state = ?3"
+  )
+    .bind(rec.address, rec.city, rec.state)
+    .first<{ id: string }>();
+  if (byAddr) return byAddr.id;
+
+  const id = `prp_${crypto.randomUUID().slice(0, 12)}`;
+  await env.DB.prepare(
+    `INSERT INTO properties (id, apn, address, city, county, state, zip, origin)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'live')`
+  )
+    .bind(id, rec.apn ?? null, rec.address, rec.city, rec.county, rec.state, rec.zip ?? null)
+    .run();
+  return id;
+}
+
+/* ------------------------------ connectors ------------------------------ */
+
+type Connector = (env: Env, cfg: ConnectorCfg, markets: string[]) => Promise<ConnectorResult>;
+
+const countyDeeds: Connector = async (env, cfg, markets) => {
+  const raw = await vendorFetch(vendorUrl(cfg, "deeds", markets), { headers: authHeaders(cfg) });
+  const rows = JSON.parse(raw) as Array<{
+    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
+    zip?: string; price: number; isCash: boolean; deedType?: string; buyerName: string;
+    sellerName: string; recordedAt: string;
+  }>;
+  let ingested = 0, skipped = 0;
+  for (const r of rows) {
+    const propertyId = await resolveProperty(env, r);
+    const entityId = await resolveEntity(env, r.buyerName);
+    const res = await env.DB.prepare(
+      `INSERT OR IGNORE INTO transactions
+         (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name, recorded_at, doc_number, origin)
+       VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live')`
+    )
+      .bind(
+        `trx_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, Math.round(r.price),
+        r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName, r.recordedAt, r.docNumber
+      )
+      .run();
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
 };
 
-const permits: Connector = async (env) => {
-  if (!env.PERMIT_API_KEY) return { ingested: 0, skipped: 0, checksum: null };
-  // Municipal portals / Shovels-style aggregator → permits table,
-  // filtered to structural/ground_up/addition above a valuation floor.
-  const raw = "[]";
-  return { ingested: 0, skipped: 0, checksum: await sha256Hex(raw) };
+const countyLoans: Connector = async (env, cfg, markets) => {
+  const raw = await vendorFetch(vendorUrl(cfg, "loans", markets), { headers: authHeaders(cfg) });
+  const rows = JSON.parse(raw) as Array<{
+    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
+    lenderName: string; lenderType?: string; principal: number; ratePct?: number;
+    originatedAt: string; termMonths?: number; maturityDate?: string; borrowerName: string;
+  }>;
+  let ingested = 0, skipped = 0;
+  const allowedTypes = new Set(["private", "hard_money", "bank", "credit_union", "seller"]);
+  for (const r of rows) {
+    const propertyId = await resolveProperty(env, r);
+    const entityId = await resolveEntity(env, r.borrowerName);
+    const lenderType = allowedTypes.has(r.lenderType ?? "") ? r.lenderType! : "private";
+    const res = await env.DB.prepare(
+      `INSERT OR IGNORE INTO loans
+         (id, property_id, entity_id, lender_name, lender_type, principal, rate_pct,
+          originated_at, term_months, maturity_date, doc_number, origin)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'live')`
+    )
+      .bind(
+        `lon_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.lenderName, lenderType,
+        Math.round(r.principal), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
+        r.maturityDate ?? null, r.docNumber
+      )
+      .run();
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
 };
 
-const liens: Connector = async (env) => {
-  if (!env.COUNTY_API_KEY) return { ingested: 0, skipped: 0, checksum: null };
-  // Mechanics liens + lis pendens recorded yesterday → liens table.
-  const raw = "[]";
-  return { ingested: 0, skipped: 0, checksum: await sha256Hex(raw) };
+const permits: Connector = async (env, cfg, markets) => {
+  const raw = await vendorFetch(vendorUrl(cfg, "permits", markets), { headers: authHeaders(cfg) });
+  const rows = JSON.parse(raw) as Array<{
+    permitNo: string; apn?: string; address: string; city: string; county: string; state: string;
+    permitType: string; description?: string; valuation: number; filedAt: string;
+    status?: string; contractor?: string; ownerName: string;
+  }>;
+  let ingested = 0, skipped = 0;
+  const types = new Set(["ground_up", "structural", "addition", "demo", "remodel", "pool", "solar", "other"]);
+  for (const r of rows) {
+    const propertyId = await resolveProperty(env, r);
+    const entityId = await resolveEntity(env, r.ownerName);
+    const res = await env.DB.prepare(
+      `INSERT OR IGNORE INTO permits
+         (id, property_id, entity_id, permit_no, permit_type, description, valuation, filed_at, status, contractor, origin)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live')`
+    )
+      .bind(
+        `pmt_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.permitNo,
+        types.has(r.permitType) ? r.permitType : "other", r.description ?? null,
+        Math.round(r.valuation), r.filedAt, r.status ?? "filed", r.contractor ?? null
+      )
+      .run();
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
 };
 
-const skipTrace: Connector = async (env) => {
-  if (!env.SKIP_TRACE_API_KEY) return { ingested: 0, skipped: 0, checksum: null };
-  // For entities that gained a trigger but have no contact rows with
-  // confidence >= 0.8: resolve principals via SoS filings, then phone/email
-  // via skip-trace vendor → contacts table.
-  const raw = "[]";
-  return { ingested: 0, skipped: 0, checksum: await sha256Hex(raw) };
+const liens: Connector = async (env, cfg, markets) => {
+  const raw = await vendorFetch(vendorUrl(cfg, "liens", markets), { headers: authHeaders(cfg) });
+  const rows = JSON.parse(raw) as Array<{
+    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
+    lienType?: string; claimant: string; amount: number; filedAt: string; ownerName: string;
+  }>;
+  let ingested = 0, skipped = 0;
+  const types = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens"]);
+  for (const r of rows) {
+    const propertyId = await resolveProperty(env, r);
+    const entityId = await resolveEntity(env, r.ownerName);
+    const res = await env.DB.prepare(
+      `INSERT OR IGNORE INTO liens
+         (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number, origin)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'live')`
+    )
+      .bind(
+        `lin_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId,
+        types.has(r.lienType ?? "") ? r.lienType! : "mechanics", r.claimant,
+        Math.round(r.amount), r.filedAt, r.docNumber
+      )
+      .run();
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
 };
 
-const CONNECTORS: Array<[name: string, run: Connector]> = [
-  ["county_deeds", countyDeeds],
-  ["county_loans", countyLoans],
-  ["permits", permits],
-  ["liens", liens],
-  ["skip_trace", skipTrace],
-];
+const skipTrace: Connector = async (env, cfg) => {
+  // Entities that gained a live trigger but have no high-confidence contact.
+  const targets = await env.DB.prepare(
+    `SELECT DISTINCT e.id, e.name FROM triggers t
+     JOIN entities e ON e.id = t.entity_id
+     WHERE t.status NOT IN ('dismissed','converted')
+       AND NOT EXISTS (
+         SELECT 1 FROM contacts c WHERE c.entity_id = e.id AND c.confidence >= 0.8
+       )
+     LIMIT 50`
+  ).all<{ id: string; name: string }>();
+  if (targets.results.length === 0) return { ingested: 0, skipped: 0, checksum: null };
 
-/* ------------------------------------------------------------------ */
-/* Orchestration                                                       */
-/* ------------------------------------------------------------------ */
+  const raw = await vendorFetch(`${cfg.baseUrl}/trace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders(cfg) },
+    body: JSON.stringify({ names: targets.results.map((t) => t.name) }),
+  });
+  const rows = JSON.parse(raw) as Array<{
+    entityName: string; contactName: string; title?: string; phone?: string;
+    email?: string; linkedin?: string; confidence: number;
+  }>;
+  let ingested = 0, skipped = 0;
+  for (const r of rows) {
+    const entity = targets.results.find((t) => normalizeName(t.name) === normalizeName(r.entityName));
+    if (!entity) { skipped++; continue; }
+    await env.DB.prepare(
+      `INSERT INTO contacts (id, entity_id, name, title, phone, email, linkedin, source, confidence, verified_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'skip_trace', ?8, date('now'))`
+    )
+      .bind(
+        `con_${crypto.randomUUID().slice(0, 12)}`, entity.id, r.contactName, r.title ?? null,
+        r.phone ?? null, r.email ?? null, r.linkedin ?? null, r.confidence
+      )
+      .run();
+    ingested++;
+  }
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
+};
 
-async function runWithAudit(env: Env, name: string, connector: Connector): Promise<void> {
+export const CONNECTOR_IDS = ["county_deeds", "county_loans", "permits", "liens", "skip_trace"] as const;
+
+const CONNECTORS: Record<string, Connector> = {
+  county_deeds: countyDeeds,
+  county_loans: countyLoans,
+  permits,
+  liens,
+  skip_trace: skipTrace,
+};
+
+/* ------------------------------ orchestration ------------------------------ */
+
+async function runWithAudit(
+  env: Env,
+  name: string,
+  run: () => Promise<ConnectorResult>
+): Promise<void> {
   const runId = crypto.randomUUID();
   await env.DB.prepare(
     "INSERT INTO ingestion_runs (id, connector, started_at, status) VALUES (?1, ?2, datetime('now'), 'running')"
@@ -117,7 +360,7 @@ async function runWithAudit(env: Env, name: string, connector: Connector): Promi
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       if (BACKOFF_MS[attempt - 1]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
-      const result = await connector(env);
+      const result = await run();
       await env.DB.prepare(
         `UPDATE ingestion_runs SET finished_at = datetime('now'), status = 'ok',
          rows_ingested = ?1, rows_skipped = ?2, attempts = ?3, checksum = ?4 WHERE id = ?5`
@@ -137,24 +380,37 @@ async function runWithAudit(env: Env, name: string, connector: Connector): Promi
     .run();
 }
 
+/** Run one connector (admin "Run now"). Returns false if disabled/unconfigured. */
+export async function runSingleConnector(env: Env, id: string): Promise<boolean> {
+  const connector = CONNECTORS[id];
+  if (!connector) return false;
+  const cfg = await getConnectorConfig(env, id);
+  if (!cfg.enabled || !cfg.baseUrl) return false;
+  const markets = await getMarkets(env);
+  await runWithAudit(env, id, () => connector(env, cfg, markets));
+  await runWithAudit(env, "scoring", async () => ({
+    ingested: await rescoreTriggers(env),
+    skipped: 0,
+    checksum: null,
+  }));
+  return true;
+}
+
 export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promise<void> {
   console.log(`ingestion pipeline start ${scheduledFor.toISOString()}`);
+  const markets = await getMarkets(env);
 
-  // Sources run sequentially to stay inside D1 write limits; each is
-  // independently retried and audited.
-  for (const [name, connector] of CONNECTORS) {
-    await runWithAudit(env, name, connector);
+  for (const id of CONNECTOR_IDS) {
+    const cfg = await getConnectorConfig(env, id);
+    if (!cfg.enabled || !cfg.baseUrl) continue; // not yet configured — skip silently
+    await runWithAudit(env, id, () => CONNECTORS[id](env, cfg, markets));
   }
 
-  // Final stage: recompute materialized triggers + entity performance
-  // snapshots from whatever data committed above.
-  await runWithAudit(env, "scoring", async () => {
-    const emitted = await rescoreTriggers(env);
-    return { ingested: emitted, skipped: 0, checksum: null };
-  });
+  await runWithAudit(env, "scoring", async () => ({
+    ingested: await rescoreTriggers(env),
+    skipped: 0,
+    checksum: null,
+  }));
 
   console.log("ingestion pipeline complete");
 }
-
-// referenced by connector stubs' documented contract
-void vendorFetch;

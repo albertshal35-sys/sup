@@ -3,8 +3,9 @@
 -- windows (8-10mo maturities, 60-day cash buys) always fire.
 -- ============================================================
 
-DELETE FROM triggers; DELETE FROM watchlist; DELETE FROM liens; DELETE FROM permits;
-DELETE FROM loans; DELETE FROM transactions; DELETE FROM contacts; DELETE FROM properties;
+DELETE FROM triggers; DELETE FROM watchlist; DELETE FROM lead_events; DELETE FROM liens;
+DELETE FROM permits; DELETE FROM loans; DELETE FROM transactions; DELETE FROM contacts;
+DELETE FROM entity_principals; DELETE FROM principals; DELETE FROM properties;
 DELETE FROM entities; DELETE FROM ingestion_runs; DELETE FROM users;
 
 INSERT INTO users (id, email, name, org_name, role) VALUES
@@ -130,3 +131,34 @@ INSERT INTO ingestion_runs (id, connector, started_at, finished_at, status, rows
   ('run_04','liens',datetime('now','-8 hours'),datetime('now','-8 hours','+2 minutes'),'ok',88,1,1,'19ffa8'),
   ('run_05','skip_trace',datetime('now','-8 hours'),datetime('now','-7 hours','+52 minutes'),'partial',61,12,3,'e2a940'),
   ('run_06','scoring',datetime('now','-7 hours'),datetime('now','-7 hours','+1 minutes'),'ok',18,0,1,NULL);
+
+-- ---------- Principals & cross-LLC links (borrower network) ----------
+INSERT INTO principals (id, name, phone, email, origin) VALUES
+  ('prn_01','Marcus Delgado','(480) 555-0134','marcus@sunbeltequity.com','demo'),
+  ('prn_02','Priya Raman','(512) 555-0182','praman@ironwooddev.com','demo'),
+  ('prn_03','Tom Kowalski','(305) 555-0158','tom@blueheronbuild.com','demo'),
+  ('prn_04','Daniel Okafor','(214) 555-0197','d.okafor@gmail.com','demo'),
+  ('prn_05','Elena Vasquez','(480) 555-0176','elena@mesaverdecap.com','demo');
+
+INSERT INTO entity_principals (id, principal_id, entity_id, role, source, confidence) VALUES
+  ('ep_01','prn_01','ent_01','managing_member','sos_filing',0.95),
+  ('ep_02','prn_01','ent_04','manager','sos_filing',0.82),
+  ('ep_03','prn_02','ent_02','managing_member','sos_filing',0.94),
+  ('ep_04','prn_02','ent_07','managing_member','sos_filing',0.88),
+  ('ep_05','prn_03','ent_05','managing_member','sos_filing',0.96),
+  ('ep_06','prn_03','ent_09','managing_member','sos_filing',0.9),
+  ('ep_07','prn_04','ent_03','owner','county_recorder',1.0),
+  ('ep_08','prn_05','ent_06','managing_member','sos_filing',0.9);
+
+-- ---------- Mark every seeded record as demo data ----------
+UPDATE entities SET origin='demo';
+UPDATE properties SET origin='demo';
+UPDATE transactions SET origin='demo';
+UPDATE loans SET origin='demo';
+UPDATE permits SET origin='demo';
+UPDATE liens SET origin='demo';
+UPDATE triggers SET origin='demo';
+UPDATE principals SET origin='demo';
+
+-- App defaults (idempotent — also created by migration 0001)
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'demo');
