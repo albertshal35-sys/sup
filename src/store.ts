@@ -31,6 +31,8 @@ export type View =
   | "permit"
   | "lien"
   | "map"
+  | "lenders"
+  | "loanbook"
   | "watchlist"
   | "settings";
 
@@ -90,6 +92,7 @@ const emptyFeeds: Record<TriggerKind, TriggerItem[]> = {
   cash_poor: [],
   permit: [],
   lien: [],
+  custom: [],
 };
 
 export const STAGES: { id: PipelineStage; label: string }[] = [
@@ -127,7 +130,7 @@ export const useApp = create<AppState>()(
       view: "dashboard",
       mobileNavOpen: false,
       collapsed: false,
-      theme: "dark",
+      theme: "light",
       loading: true,
       paletteOpen: false,
       dataMode: "offline",
@@ -191,18 +194,19 @@ export const useApp = create<AppState>()(
         const settings = probe.status === "ok" ? probe.settings : null;
         const mode: DataMode = settings?.dataMode ?? "offline";
         set({ auth: "open", serverSettings: settings });
-        const [kpis, maturity, cashPoor, permit, lien, ingestion] = await Promise.all([
+        const [kpis, maturity, cashPoor, permit, lien, custom, ingestion] = await Promise.all([
           getKpis(mode),
           getFeed("maturity", mode),
           getFeed("cash_poor", mode),
           getFeed("permit", mode),
           getFeed("lien", mode),
+          getFeed("custom", mode),
           getIngestionStatus(mode),
         ]);
         set({
           dataMode: mode,
           kpis,
-          feeds: { maturity, cash_poor: cashPoor, permit, lien },
+          feeds: { maturity, cash_poor: cashPoor, permit, lien, custom },
           ingestion,
           loading: false,
         });

@@ -19,6 +19,7 @@
 
 import { routeRequest } from "./routes";
 import { runIngestionPipeline } from "./ingest";
+import { continueBackfills } from "./backfill";
 
 export interface Env {
   DB: D1Database;
@@ -74,6 +75,8 @@ export default {
     // Daily weekday pull: county deeds/loans, permits, liens, skip-trace,
     // then trigger materialization + scoring. Hardened with retries and
     // per-connector audit rows in ingestion_runs.
-    ctx.waitUntil(runIngestionPipeline(env, new Date(controller.scheduledTime)));
+    ctx.waitUntil(
+      runIngestionPipeline(env, new Date(controller.scheduledTime)).then(() => continueBackfills(env))
+    );
   },
 };

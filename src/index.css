@@ -3,8 +3,7 @@
 @tailwind utilities;
 
 @layer base {
-  /* ---- Obsidian (dark, default) ---- */
-  :root,
+  /* ---- Obsidian (dark) ---- */
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: 11 12 15; /* #0b0c0f */
@@ -22,7 +21,8 @@
     --card-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
   }
 
-  /* ---- Paper (light) ---- */
+  /* ---- Paper (light, default) ---- */
+  :root,
   :root[data-theme="light"] {
     color-scheme: light;
     --bg: 244 245 246; /* #f4f5f6 */

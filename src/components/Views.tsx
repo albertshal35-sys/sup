@@ -246,9 +246,9 @@ export function LienView() {
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
-        <StatCard label="Claims outstanding" value={money(totalClaimed)} sub="mechanics liens ≤21 days old" />
-        <StatCard label="Critical situations" value={String(critical)} tone={critical > 0 ? "text-danger" : undefined} sub="frozen draws, act now" />
-        <StatCard label="Avg claim" value={money(avgAmount)} sub="per lien" />
+        <StatCard label="Claims outstanding" value={money(totalClaimed)} sub="liens, judgments & penalties" />
+        <StatCard label="Critical situations" value={String(critical)} tone={critical > 0 ? "text-danger" : undefined} sub="pre-foreclosure & frozen draws" />
+        <StatCard label="Avg claim" value={money(avgAmount)} sub="per event" />
         <StatCard label="Freshest filing" value={freshest != null ? `${freshest}d ago` : "—"} sub="newest distress signal" />
       </div>
       <FilterBar filters={filters} setFilters={setFilters} markets={markets} count={filtered.length} />

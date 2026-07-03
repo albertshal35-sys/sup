@@ -1,11 +1,18 @@
 /** REST handlers backed by D1. All reads come from indexed/materialized tables. */
 
 import { json, type Env } from "./index";
-import { runIngestionPipeline, runSingleConnector, CONNECTOR_IDS } from "./ingest";
+import {
+  runIngestionPipeline, runSingleConnector, CONNECTOR_IDS,
+  RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
+} from "./ingest";
 import { encryptSecret } from "./crypto";
 import { authConfigured, loginWithCode, verifySession } from "./auth";
-import { aiAvailable, generateBrief, generateOutreach } from "./ai";
+import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, recordShape, runModel } from "./ai";
 import { sendTestDigest } from "./alerts";
+import { dataQualitySummary } from "./integrity";
+import { applyMerge } from "./resolution";
+import { backfillEligible, backfillStatus, runBackfillChunk, startBackfill } from "./backfill";
+import type { Provenance } from "./integrity";
 
 type Handler = (
   req: Request,
@@ -179,6 +186,7 @@ route("GET", "/api/triggers/maturities", feedHandler("maturity"));
 route("GET", "/api/triggers/cash-poor", feedHandler("cash_poor"));
 route("GET", "/api/triggers/permits", feedHandler("permit"));
 route("GET", "/api/triggers/liens", feedHandler("lien"));
+route("GET", "/api/triggers/custom", feedHandler("custom"));
 
 route("POST", "/api/triggers/:id/status", async (req, env, params) => {
   const body = (await req.json().catch(() => ({}))) as { status?: string };
@@ -214,7 +222,7 @@ route("GET", "/api/borrowers/:id/resume", async (_req, env, params) => {
       .all(),
     env.DB.prepare(
       `SELECT l.*, p.address, p.city, p.state FROM loans l
-       JOIN properties p ON p.id = l.property_id
+       LEFT JOIN properties p ON p.id = l.property_id
        WHERE l.entity_id = ?1 ORDER BY l.originated_at DESC`
     )
       .bind(params.id)
@@ -349,7 +357,7 @@ route("DELETE", "/api/watchlist/:entityId", async (req, env, params, url) => {
 route("GET", "/api/admin/connectors", async (_req, env) => {
   const rows = await env.DB.prepare(
     `SELECT cc.id, cc.label, cc.enabled, cc.base_url, cc.api_key_last4,
-            cc.mode, cc.scrape_url, cc.notes,
+            cc.mode, cc.scrape_url, cc.notes, cc.field_map,
             r.status AS run_status, r.finished_at AS run_finished, r.rows_ingested AS run_rows
      FROM connector_config cc
      LEFT JOIN ingestion_runs r ON r.connector = cc.id
@@ -357,7 +365,7 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
      ORDER BY cc.rowid`
   ).all<{
     id: string; label: string; enabled: number; base_url: string | null; api_key_last4: string | null;
-    mode: string; scrape_url: string | null; notes: string | null;
+    mode: string; scrape_url: string | null; notes: string | null; field_map: string | null;
     run_status: string | null; run_finished: string | null; run_rows: number | null;
   }>();
   return json(
@@ -371,6 +379,8 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
         mode: r.mode === "scrape" ? "scrape" : "api",
         scrapeUrl: r.scrape_url,
         notes: r.notes,
+        fieldMap: r.field_map,
+        isSocrata: isSocrataUrl(r.base_url),
         lastRun: r.run_status
           ? { status: r.run_status, finishedAt: r.run_finished, rowsIngested: r.run_rows ?? 0 }
           : null,
@@ -391,6 +401,7 @@ route("PUT", "/api/admin/connectors/:id", async (req, env, params) => {
     mode?: string;
     scrapeUrl?: string;
     notes?: string;
+    fieldMap?: string;
   };
   if (typeof body.enabled === "boolean") {
     await env.DB.prepare(
@@ -425,6 +436,21 @@ route("PUT", "/api/admin/connectors/:id", async (req, env, params) => {
       "UPDATE connector_config SET notes = ?1, updated_at = datetime('now') WHERE id = ?2"
     )
       .bind(body.notes.trim() || null, params.id)
+      .run();
+  }
+  if (typeof body.fieldMap === "string") {
+    const trimmed = body.fieldMap.trim();
+    if (trimmed) {
+      try {
+        JSON.parse(trimmed);
+      } catch {
+        return json({ error: "field_map_invalid_json" }, env, 400);
+      }
+    }
+    await env.DB.prepare(
+      "UPDATE connector_config SET field_map = ?1, updated_at = datetime('now') WHERE id = ?2"
+    )
+      .bind(trimmed || null, params.id)
       .run();
   }
   if (typeof body.apiKey === "string" && body.apiKey.length > 0) {
@@ -593,6 +619,317 @@ route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
   } catch (err) {
     return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
   }
+});
+
+/* ------------------------ data quality (Settings) ------------------------ */
+
+route("GET", "/api/admin/data-quality", async (_req, env) => {
+  const [summary, quarantine, merges] = await Promise.all([
+    dataQualitySummary(env),
+    env.DB.prepare(
+      `SELECT id, connector, record_kind, payload_json, reasons_json, source_url, created_at
+       FROM quarantine WHERE status = 'pending' ORDER BY created_at DESC LIMIT 50`
+    ).all(),
+    env.DB.prepare(
+      `SELECT m.id, m.reason, m.score, m.created_at,
+              ea.name AS name_a, eb.name AS name_b, m.entity_a, m.entity_b
+       FROM merge_suggestions m
+       JOIN entities ea ON ea.id = m.entity_a
+       JOIN entities eb ON eb.id = m.entity_b
+       WHERE m.status = 'pending' ORDER BY m.score DESC LIMIT 25`
+    ).all(),
+  ]);
+  return json({ ...summary, quarantine: quarantine.results, merges: merges.results }, env);
+});
+
+route("POST", "/api/admin/quarantine/:id", async (req, env, params) => {
+  const body = (await req.json().catch(() => ({}))) as { action?: string };
+  const row = await env.DB.prepare(
+    "SELECT connector, record_kind, payload_json, source_url FROM quarantine WHERE id = ?1 AND status = 'pending'"
+  )
+    .bind(params.id)
+    .first<{ connector: string; record_kind: string; payload_json: string; source_url: string | null }>();
+  if (!row) return json({ error: "not_found" }, env, 404);
+
+  if (body.action === "approve") {
+    // Operator vouched for the record — ingest it, marked as manually approved.
+    const def = RECORD_CONNECTORS[row.connector];
+    if (!def) return json({ error: "connector_gone" }, env, 409);
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(row.payload_json) as Record<string, unknown>;
+    } catch {
+      return json({ error: "payload_unparseable" }, env, 422);
+    }
+    const prov: Provenance = {
+      sourceId: row.connector, sourceUrl: row.source_url, method: "api", confidence: "direct",
+    };
+    const result = await def.upsert(env, [rec] as never[], prov);
+    await env.DB.prepare(
+      "UPDATE quarantine SET status = 'approved', resolved_at = datetime('now') WHERE id = ?1"
+    ).bind(params.id).run();
+    return json({ ok: true, ingested: result.ingested }, env);
+  }
+  if (body.action === "discard") {
+    await env.DB.prepare(
+      "UPDATE quarantine SET status = 'discarded', resolved_at = datetime('now') WHERE id = ?1"
+    ).bind(params.id).run();
+    return json({ ok: true }, env);
+  }
+  return json({ error: "invalid_action" }, env, 400);
+});
+
+route("POST", "/api/admin/merges/:id", async (req, env, params) => {
+  const body = (await req.json().catch(() => ({}))) as { action?: string };
+  if (body.action === "merge") {
+    const ok = await applyMerge(env, params.id);
+    return ok ? json({ ok: true }, env) : json({ error: "not_found" }, env, 404);
+  }
+  if (body.action === "dismiss") {
+    await env.DB.prepare(
+      "UPDATE merge_suggestions SET status = 'dismissed' WHERE id = ?1 AND status = 'pending'"
+    ).bind(params.id).run();
+    return json({ ok: true }, env);
+  }
+  return json({ error: "invalid_action" }, env, 400);
+});
+
+/* ------------------------ custom signals ------------------------ */
+
+route("GET", "/api/admin/signals", async (_req, env) => {
+  const rows = await env.DB.prepare(
+    "SELECT id, name, prompt, rule_json, enabled, last_run_at, total_hits, created_at FROM custom_signals ORDER BY created_at DESC"
+  ).all();
+  return json({ signals: rows.results }, env);
+});
+
+// Step 1: compile plain English to a deterministic rule the user confirms.
+route("POST", "/api/admin/signals/compile", async (req, env) => {
+  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
+  const body = (await req.json().catch(() => ({}))) as { prompt?: string };
+  if (!body.prompt?.trim()) return json({ error: "prompt_required" }, env, 400);
+  const rule = await compileSignalRule(env, body.prompt.trim());
+  if (!rule) return json({ error: "compile_failed" }, env, 502);
+  if (typeof rule.error === "string") return json({ error: "unsupported", detail: rule.error }, env, 422);
+  return json({ rule }, env);
+});
+
+// Step 2: save the confirmed rule. Evaluation is deterministic from here on.
+route("POST", "/api/admin/signals", async (req, env) => {
+  const body = (await req.json().catch(() => ({}))) as {
+    name?: string; prompt?: string; rule?: Record<string, unknown>;
+  };
+  if (!body.name?.trim() || !body.prompt?.trim() || !body.rule || typeof body.rule !== "object") {
+    return json({ error: "name_prompt_rule_required" }, env, 400);
+  }
+  if (!["deed", "loan", "permit", "lien"].includes(String(body.rule.record))) {
+    return json({ error: "invalid_rule_record" }, env, 422);
+  }
+  const id = `sig_${crypto.randomUUID().slice(0, 12)}`;
+  await env.DB.prepare(
+    "INSERT INTO custom_signals (id, name, prompt, rule_json) VALUES (?1, ?2, ?3, ?4)"
+  )
+    .bind(id, body.name.trim().slice(0, 80), body.prompt.trim().slice(0, 1000), JSON.stringify(body.rule))
+    .run();
+  const { evaluateCustomSignals } = await import("./signals");
+  const hits = await evaluateCustomSignals(env);
+  return json({ ok: true, id, hits }, env, 201);
+});
+
+route("POST", "/api/admin/signals/:id", async (req, env, params) => {
+  const body = (await req.json().catch(() => ({}))) as { enabled?: boolean };
+  if (typeof body.enabled !== "boolean") return json({ error: "enabled_required" }, env, 400);
+  await env.DB.prepare("UPDATE custom_signals SET enabled = ?1 WHERE id = ?2")
+    .bind(body.enabled ? 1 : 0, params.id)
+    .run();
+  return json({ ok: true }, env);
+});
+
+route("DELETE", "/api/admin/signals/:id", async (_req, env, params) => {
+  await env.DB.prepare("DELETE FROM custom_signals WHERE id = ?1").bind(params.id).run();
+  await env.DB.prepare("DELETE FROM triggers WHERE kind = 'custom' AND ref_id LIKE ?1")
+    .bind(`${params.id}:%`)
+    .run();
+  return json({ ok: true }, env);
+});
+
+/* ------------------------ competitor intelligence ------------------------ */
+
+route("GET", "/api/lenders", async (_req, env) => {
+  const mode = await getDataMode(env);
+  const rows = await env.DB.prepare(
+    `SELECT l.lender_name,
+            COUNT(*) AS loans,
+            SUM(CASE WHEN l.instrument = 'ucc' THEN 1 ELSE 0 END) AS ucc_filings,
+            SUM(l.principal) AS volume,
+            AVG(CASE WHEN l.rate_pct > 0 THEN l.rate_pct END) AS avg_rate,
+            SUM(CASE WHEN l.status = 'active'
+                      AND date(COALESCE(l.maturity_date, date(l.originated_at, '+' || COALESCE(l.term_months,12) || ' months')))
+                          BETWEEN date('now') AND date('now','+90 days')
+                     THEN 1 ELSE 0 END) AS maturing_90d,
+            SUM(CASE WHEN l.status = 'active'
+                      AND date(COALESCE(l.maturity_date, date(l.originated_at, '+' || COALESCE(l.term_months,12) || ' months')))
+                          BETWEEN date('now') AND date('now','+90 days')
+                     THEN l.principal ELSE 0 END) AS maturing_volume,
+            SUM(CASE WHEN l.satisfied_at >= date('now','-90 days') THEN 1 ELSE 0 END) AS payoffs_90d
+     FROM loans l
+     WHERE l.lender_type IN ('private','hard_money')
+       AND (?1 = 'demo' OR l.origin = 'live')
+     GROUP BY l.lender_name
+     HAVING COUNT(*) >= 1
+     ORDER BY volume DESC
+     LIMIT 100`
+  )
+    .bind(mode)
+    .all();
+  return json({ lenders: rows.results }, env);
+});
+
+route("GET", "/api/lenders/:name/loans", async (_req, env, params) => {
+  const mode = await getDataMode(env);
+  const rows = await env.DB.prepare(
+    `SELECT l.id, l.principal, l.rate_pct, l.originated_at, l.term_months, l.status, l.instrument,
+            l.source_url, l.confidence,
+            COALESCE(l.maturity_date, date(l.originated_at, '+' || COALESCE(l.term_months,12) || ' months')) AS maturity,
+            e.id AS entity_id, e.name AS entity_name, e.flips_36mo, e.velocity_score,
+            p.address, p.city
+     FROM loans l
+     LEFT JOIN entities e ON e.id = l.entity_id
+     LEFT JOIN properties p ON p.id = l.property_id
+     WHERE l.lender_name = ?1 AND (?2 = 'demo' OR l.origin = 'live')
+     ORDER BY l.status = 'active' DESC, maturity ASC
+     LIMIT 100`
+  )
+    .bind(decodeURIComponent(params.name), mode)
+    .all();
+  return json({ loans: rows.results }, env);
+});
+
+/* ------------------------ loan book ------------------------ */
+
+route("GET", "/api/loanbook", async (_req, env) => {
+  const rows = await env.DB.prepare(
+    `SELECT lb.*, e.name AS entity_name FROM loan_book lb
+     LEFT JOIN entities e ON e.id = lb.entity_id
+     ORDER BY lb.status IN ('current','late','extended') DESC, lb.maturity_date ASC`
+  ).all();
+  return json({ loans: rows.results }, env);
+});
+
+route("POST", "/api/loanbook", async (req, env) => {
+  const b = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  const id = typeof b.id === "string" && b.id.startsWith("lbk_") ? b.id : `lbk_${crypto.randomUUID().slice(0, 12)}`;
+  const statuses = new Set(["current", "late", "extended", "paid_off", "defaulted"]);
+  const principal = Math.round(Number(b.principal) || 0);
+  const ratePct = Number(b.ratePct) || 0;
+  if (!b.borrowerName || principal <= 0 || !b.originatedAt) {
+    return json({ error: "borrower_principal_date_required" }, env, 400);
+  }
+  const termMonths = Math.round(Number(b.termMonths)) || 12;
+  const maturity = typeof b.maturityDate === "string" && b.maturityDate ? b.maturityDate : null;
+  await env.DB.prepare(
+    `INSERT INTO loan_book (id, entity_id, borrower_name, property_address, principal, rate_pct, points,
+                            originated_at, term_months, maturity_date, status, notes)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, COALESCE(?10, date(?8, '+' || ?9 || ' months')), ?11, ?12)
+     ON CONFLICT (id) DO UPDATE SET
+       entity_id = excluded.entity_id, borrower_name = excluded.borrower_name,
+       property_address = excluded.property_address, principal = excluded.principal,
+       rate_pct = excluded.rate_pct, points = excluded.points, originated_at = excluded.originated_at,
+       term_months = excluded.term_months, maturity_date = excluded.maturity_date,
+       status = excluded.status, notes = excluded.notes, updated_at = datetime('now')`
+  )
+    .bind(
+      id,
+      typeof b.entityId === "string" && b.entityId ? b.entityId : null,
+      String(b.borrowerName).slice(0, 120),
+      typeof b.propertyAddress === "string" && b.propertyAddress ? b.propertyAddress.slice(0, 160) : null,
+      principal,
+      ratePct,
+      b.points == null ? null : Number(b.points),
+      String(b.originatedAt).slice(0, 10),
+      termMonths,
+      maturity,
+      statuses.has(String(b.status)) ? String(b.status) : "current",
+      typeof b.notes === "string" && b.notes ? b.notes.slice(0, 1000) : null
+    )
+    .run();
+  return json({ ok: true, id }, env, 201);
+});
+
+route("DELETE", "/api/loanbook/:id", async (_req, env, params) => {
+  await env.DB.prepare("DELETE FROM loan_book WHERE id = ?1").bind(params.id).run();
+  return json({ ok: true }, env);
+});
+
+/* ------------------------ historical backfill ------------------------ */
+
+route("GET", "/api/admin/backfill", async (_req, env) => {
+  const status = await backfillStatus(env);
+  const eligible: string[] = [];
+  for (const id of Object.keys(RECORD_CONNECTORS)) {
+    if (await backfillEligible(env, id)) eligible.push(id);
+  }
+  return json({ backfills: status, eligible }, env);
+});
+
+route("POST", "/api/admin/backfill/:id", async (_req, env, params) => {
+  const ok = await startBackfill(env, params.id);
+  if (!ok) return json({ error: "not_eligible" }, env, 409);
+  const chunk = await runBackfillChunk(env, params.id); // kick the first window immediately
+  return json({ ok: true, firstChunk: chunk }, env, 202);
+});
+
+route("POST", "/api/admin/backfill/:id/chunk", async (_req, env, params) => {
+  const chunk = await runBackfillChunk(env, params.id);
+  return json({ ok: true, ...chunk }, env);
+});
+
+/* ------------------------ Socrata field auto-mapping ------------------------ */
+
+route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => {
+  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
+  const shape = recordShape(params.id);
+  if (!shape) return json({ error: "unknown_connector" }, env, 404);
+  const cfg = await getConnectorConfig(env, params.id);
+  if (!cfg.baseUrl || !isSocrataUrl(cfg.baseUrl)) return json({ error: "not_a_socrata_source" }, env, 409);
+
+  const sampleRes = await fetch(`${cfg.baseUrl}?$limit=3`, {
+    headers: cfg.apiKey ? { "X-App-Token": cfg.apiKey } : {},
+  });
+  if (!sampleRes.ok) return json({ error: `sample_fetch_${sampleRes.status}` }, env, 502);
+  const sample = (await sampleRes.text()).slice(0, 12_000);
+
+  const text = await runModel(
+    env,
+    [
+      {
+        role: "system",
+        content:
+          "You map an open-data dataset's field names onto a target record shape. Given sample rows, return ONLY a JSON object: " +
+          '{"dateField": "<the dataset field to filter/order by date>", "map": {<targetField>: <datasetField or "=CONSTANT">}} ' +
+          "covering every target field you can. Use \"=NY\"-style constants for fixed values the dataset implies but does not carry. " +
+          "Target shape:\n" + shape,
+      },
+      { role: "user", content: sample },
+    ],
+    1024
+  );
+  const cleaned = text.replace(/```(?:json)?/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end <= start) return json({ error: "automap_failed" }, env, 502);
+  let mapping: unknown;
+  try {
+    mapping = JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    return json({ error: "automap_failed" }, env, 502);
+  }
+  await env.DB.prepare(
+    "UPDATE connector_config SET field_map = ?1, updated_at = datetime('now') WHERE id = ?2"
+  )
+    .bind(JSON.stringify(mapping), params.id)
+    .run();
+  return json({ ok: true, fieldMap: mapping }, env);
 });
 
 /* ------------------------ inbound webhooks ------------------------ */

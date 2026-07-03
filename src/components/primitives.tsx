@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Urgency } from "../types";
+import type { RecordConfidence, Urgency } from "../types";
 import { classNames } from "../lib/format";
 
 /** Urgency pill — critical / hot / warm */
@@ -105,5 +105,54 @@ export function Countdown({ days }: { days: number }) {
 export function EmptyState({ label }: { label: string }) {
   return (
     <div className="flex h-32 items-center justify-center text-xs text-tx3">{label}</div>
+  );
+}
+
+/**
+ * Record trust badge. Corroborated = two independent sources agree;
+ * direct = structured API; extracted = AI-parsed from a scraped page.
+ * Links to the source document when one is on file.
+ */
+export function ProvenanceBadge({
+  confidence,
+  sourceUrl,
+  sourceId,
+}: {
+  confidence: RecordConfidence;
+  sourceUrl?: string | null;
+  sourceId?: string | null;
+}) {
+  const tone: Record<RecordConfidence, string> = {
+    corroborated: "border-ok/30 bg-ok/10 text-ok",
+    direct: "border-line bg-raised/60 text-tx2",
+    extracted: "border-warn/30 bg-warn/10 text-warn",
+  };
+  const label: Record<RecordConfidence, string> = {
+    corroborated: "2×",
+    direct: "src",
+    extracted: "ai",
+  };
+  const title: Record<RecordConfidence, string> = {
+    corroborated: "Corroborated — two independent sources agree on this record",
+    direct: "Direct — from a structured data source",
+    extracted: "Extracted — AI-parsed from a scraped page (grounding-verified)",
+  };
+  const chip = (
+    <span
+      title={`${title[confidence]}${sourceId ? ` · ${sourceId}` : ""}${sourceUrl ? " · click to open source" : ""}`}
+      className={classNames(
+        "inline-flex items-center rounded border px-1 py-px font-mono text-[10px] font-semibold leading-none",
+        tone[confidence]
+      )}
+    >
+      {label[confidence]}
+    </span>
+  );
+  return sourceUrl ? (
+    <a href={sourceUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+      {chip}
+    </a>
+  ) : (
+    chip
   );
 }

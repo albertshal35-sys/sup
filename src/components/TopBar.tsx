@@ -8,8 +8,10 @@ const TITLES: Record<View, { title: string; sub: string }> = {
   maturity: { title: "Upcoming Maturities", sub: "Private notes entering months 8–10 — refi window" },
   cash_poor: { title: "Cash-Poor Buyers", sub: "Multiple all-cash buys < 60 days — delayed financing" },
   permit: { title: "Permit Intelligence", sub: "Ground-up & structural filings, matched to principals" },
-  lien: { title: "Lien Monitoring", sub: "Fresh mechanics liens — frozen draws, rescue capital" },
+  lien: { title: "Distress Monitoring", sub: "Liens, lis pendens, violations, tax liens & auctions — rescue capital" },
   map: { title: "Borough Map", sub: "Every live signal across the five boroughs" },
+  lenders: { title: "Lender Intelligence", sub: "Who's lending in your markets — and whose book is maturing" },
+  loanbook: { title: "Loan Book", sub: "Your funded deals — balances, rates, payoff dates" },
   watchlist: { title: "Pipeline", sub: "Saved leads — watching through funded" },
   settings: { title: "Settings", sub: "Data sources, integrations & administration" },
 };

@@ -6,6 +6,7 @@
  */
 
 import type { Env } from "./index";
+import { detectAnomalies } from "./integrity";
 
 interface AlertConfig {
   enabled: boolean;
@@ -43,7 +44,7 @@ const money = (n: number) =>
 
 /** Build the digest HTML from the last 26h of signals. Returns null if quiet. */
 async function buildDigest(env: Env): Promise<{ subject: string; html: string } | null> {
-  const [fresh, d60] = await Promise.all([
+  const [fresh, d60, myBook, quarantinePending, anomalies] = await Promise.all([
     env.DB.prepare(
       `SELECT t.kind, t.urgency, t.headline, t.score, e.name AS entity_name,
               p.address, p.city
@@ -62,9 +63,22 @@ async function buildDigest(env: Env): Promise<{ subject: string; html: string } 
          AND julianday(COALESCE(l.maturity_date, date(l.originated_at,'+12 months'))) - julianday('now') BETWEEN 55 AND 60
        ORDER BY days ASC LIMIT 10`
     ).all<{ entity_name: string; principal: number; rate_pct: number | null; days: number }>(),
+    env.DB.prepare(
+      `SELECT borrower_name, principal,
+              CAST(julianday(maturity_date) - julianday('now') AS INTEGER) AS days
+       FROM loan_book
+       WHERE status IN ('current','late','extended') AND maturity_date IS NOT NULL
+         AND julianday(maturity_date) - julianday('now') BETWEEN 55 AND 60
+       ORDER BY days ASC LIMIT 10`
+    ).all<{ borrower_name: string; principal: number; days: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM quarantine WHERE status = 'pending'").first<{ c: number }>(),
+    detectAnomalies(env),
   ]);
 
-  if (fresh.results.length === 0 && d60.results.length === 0) return null;
+  if (
+    fresh.results.length === 0 && d60.results.length === 0 &&
+    myBook.results.length === 0 && anomalies.length === 0
+  ) return null;
 
   const critical = fresh.results.filter((t) => t.urgency === "critical");
   const row = (label: string, body: string) =>
@@ -96,6 +110,9 @@ async function buildDigest(env: Env): Promise<{ subject: string; html: string } 
     </p>
     ${items ? `<table style="border-collapse:collapse;width:100%">${items}</table>` : ""}
     ${balloons ? `<h3 style="font-size:13px;color:#17191d;margin:18px 0 6px">Crossing D-60</h3><table style="border-collapse:collapse;width:100%">${balloons}</table>` : ""}
+    ${myBook.results.length ? `<h3 style="font-size:13px;color:#17191d;margin:18px 0 6px">Your loan book</h3><table style="border-collapse:collapse;width:100%">${myBook.results.map((l) => row(`D-${l.days}`, `<strong>${l.borrower_name}</strong> — your ${money(l.principal)} note crosses the 60-day window`)).join("")}</table>` : ""}
+    ${anomalies.length ? `<h3 style="font-size:13px;color:#b4232a;margin:18px 0 6px">Source anomalies</h3><table style="border-collapse:collapse;width:100%">${anomalies.map((a) => row("CHECK", `<strong>${a.connector}</strong> returned ${a.today} rows today vs a ~${a.baseline}/day baseline — the source may be broken`)).join("")}</table>` : ""}
+    ${(quarantinePending?.c ?? 0) > 0 ? `<p style="font-size:12px;color:#5a616a;margin-top:14px">${quarantinePending!.c} record${quarantinePending!.c === 1 ? "" : "s"} waiting in quarantine — review in Settings → Data quality.</p>` : ""}
     <p style="font-size:11px;color:#8a919b;margin-top:20px">Sent by your LienWolf pipeline · manage in Settings → Alerts</p>
   </div>`;
 

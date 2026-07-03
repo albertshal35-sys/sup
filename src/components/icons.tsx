@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   Banknote,
   Bookmark,
+  BookOpen,
   Building2,
   CalendarClock,
   CalendarDays,
@@ -18,6 +19,7 @@ import {
   ExternalLink,
   Hammer,
   HelpCircle,
+  Landmark,
   LayoutGrid,
   Mail,
   Map,
@@ -70,3 +72,5 @@ export const IconHelp = tune(HelpCircle);
 export const IconMap = tune(Map);
 export const IconCollapse = tune(PanelLeftClose);
 export const IconExpand = tune(PanelLeftOpen);
+export const IconLandmark = tune(Landmark);
+export const IconBook = tune(BookOpen);

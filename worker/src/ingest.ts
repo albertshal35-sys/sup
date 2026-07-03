@@ -3,38 +3,40 @@
  *
  * Every connector runs in one of two modes, configured from Settings:
  *
- *  - **api**: pull normalized JSON from a vendor endpoint (contract below).
- *  - **scrape**: render the configured government/portal URL with Cloudflare
- *    Browser Rendering (managed headless browser), then have Workers AI
- *    (@cf/moonshotai/kimi-k2.6 via AI Gateway) extract structured records
- *    from the page — county recorder searches, Accela permit portals and
- *    clerk sites rarely have public APIs, so scraping is the default path.
+ *  - **api**: pull JSON from an endpoint. Two flavors are auto-detected:
+ *      · Socrata open-data resources (ACRIS, DOB, HPD, data.ny.gov — free)
+ *        — recognized by the /resource/xxxx-xxxx.json URL shape; rows are
+ *        translated through the connector's saved field map (AI can draft
+ *        the map once from sample rows; pulls after that are deterministic).
+ *      · Normalizing vendor APIs using the contract below.
+ *  - **scrape**: render the configured portal URL with Cloudflare Browser
+ *    Rendering (managed headless browser), then have Workers AI extract
+ *    structured records — followed by a grounding verification pass that
+ *    quarantines any record whose values can't be shown in the page.
  *
- * Both modes feed the same idempotent upsert layer (doc/permit numbers are
- * unique), the same retry/audit harness, and the same scoring stage.
+ * Every record then passes the same integrity gates (sanity checks →
+ * quarantine on failure), carries provenance (source, method, confidence),
+ * and feeds idempotent upserts, per-source stats, and scoring.
  *
  * API vendor payload contract:
  *   GET {base}/deeds?since=YYYY-MM-DD&markets=County,ST;County,ST
  *     → [{ docNumber, apn?, address, city, county, state, zip?, price,
  *          isCash, deedType?, buyerName, sellerName, recordedAt }]
- *   GET {base}/loans?since=…    → [{ docNumber, apn?, address, city, county,
- *          state, lenderName, lenderType?, principal, ratePct?,
- *          originatedAt, termMonths?, maturityDate?, borrowerName }]
- *   GET {base}/permits?since=…  → [{ permitNo, address, city, county, state,
- *          permitType, description?, valuation, filedAt, status?,
- *          contractor?, ownerName }]
- *   GET {base}/liens?since=…    → [{ docNumber, address, city, county, state,
- *          lienType?, claimant, amount, filedAt, ownerName }]
+ *   GET {base}/loans?since=…    → [{ docNumber, …, lenderName, lenderType?,
+ *          principal, ratePct?, originatedAt, termMonths?, maturityDate?, borrowerName }]
+ *   GET {base}/permits?since=…  → [{ permitNo, …, permitType, valuation, filedAt, ownerName }]
+ *   GET {base}/liens?since=…    → [{ docNumber, …, lienType?, claimant, amount, filedAt, ownerName }]
  *   POST {base}/trace { names: string[] }   (Apollo-compatible enrichment)
- *     → [{ entityName, contactName, title?, phone?, email?, linkedin?,
- *          confidence }]
  */
 
 import type { Env } from "./index";
 import { decryptSecret } from "./crypto";
 import { rescoreTriggers } from "./scoring";
-import { extractRecords, renderPageMarkdown } from "./ai";
+import { extractRecords, renderPageMarkdown, verifyGrounding } from "./ai";
 import { maybeSendDigest } from "./alerts";
+import { gateRecords, recordSourceStats, corroborate, type Provenance } from "./integrity";
+import { evaluateCustomSignals } from "./signals";
+import { generateMergeSuggestions } from "./resolution";
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 2000, 8000];
@@ -45,7 +47,7 @@ interface ConnectorResult {
   checksum: string | null;
 }
 
-interface ConnectorCfg {
+export interface ConnectorCfg {
   id: string;
   enabled: boolean;
   mode: "api" | "scrape";
@@ -53,6 +55,7 @@ interface ConnectorCfg {
   scrapeUrl: string | null;
   notes: string | null;
   apiKey: string | null;
+  fieldMap: { dateField?: string; map?: Record<string, string> } | null;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -84,13 +87,13 @@ const ENV_KEY_FALLBACK: Record<string, keyof Env> = {
 
 export async function getConnectorConfig(env: Env, id: string): Promise<ConnectorCfg> {
   const row = await env.DB.prepare(
-    `SELECT enabled, mode, base_url, scrape_url, notes, api_key_ct, api_key_iv
+    `SELECT enabled, mode, base_url, scrape_url, notes, field_map, api_key_ct, api_key_iv
      FROM connector_config WHERE id = ?1`
   )
     .bind(id)
     .first<{
       enabled: number; mode: string; base_url: string | null; scrape_url: string | null;
-      notes: string | null; api_key_ct: string | null; api_key_iv: string | null;
+      notes: string | null; field_map: string | null; api_key_ct: string | null; api_key_iv: string | null;
     }>();
 
   let apiKey: string | null = null;
@@ -98,7 +101,16 @@ export async function getConnectorConfig(env: Env, id: string): Promise<Connecto
   if (row?.api_key_ct && row.api_key_iv && kek) {
     apiKey = await decryptSecret(kek, row.api_key_ct, row.api_key_iv);
   }
-  if (!apiKey) apiKey = (env[ENV_KEY_FALLBACK[id]] as string | undefined) ?? null;
+  if (!apiKey && ENV_KEY_FALLBACK[id]) apiKey = (env[ENV_KEY_FALLBACK[id]] as string | undefined) ?? null;
+
+  let fieldMap: ConnectorCfg["fieldMap"] = null;
+  if (row?.field_map) {
+    try {
+      fieldMap = JSON.parse(row.field_map) as ConnectorCfg["fieldMap"];
+    } catch {
+      fieldMap = null;
+    }
+  }
 
   return {
     id,
@@ -108,10 +120,11 @@ export async function getConnectorConfig(env: Env, id: string): Promise<Connecto
     scrapeUrl: row?.scrape_url ?? null,
     notes: row?.notes ?? null,
     apiKey,
+    fieldMap,
   };
 }
 
-async function getMarkets(env: Env): Promise<string[]> {
+export async function getMarkets(env: Env): Promise<string[]> {
   const row = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'markets'").first<{ value: string }>();
   try {
     return row ? (JSON.parse(row.value) as string[]) : [];
@@ -134,11 +147,57 @@ function authHeaders(cfg: ConnectorCfg): Record<string, string> {
   return cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {};
 }
 
+/* ----------------------------- Socrata adapter ----------------------------- */
+
+/** NYC Open Data / data.ny.gov resource endpoints — free, paginated, SoQL. */
+export function isSocrataUrl(url: string | null): boolean {
+  return Boolean(url && /\/resource\/[a-z0-9]{4}-[a-z0-9]{4}(\.json)?$/i.test(url));
+}
+
+/**
+ * Fetch a date window from a Socrata resource and translate rows through
+ * the connector's field map: { dateField, map: { ourField: theirField } }.
+ * Map values starting with "=" are constants (e.g. "state": "=NY").
+ */
+export async function socrataFetch(
+  cfg: ConnectorCfg,
+  window: { from: string; to: string },
+  limit = 1000
+): Promise<{ raw: string; rows: Record<string, unknown>[] }> {
+  if (!cfg.fieldMap?.dateField || !cfg.fieldMap.map) throw new Error("field_map_missing");
+  const dateField = cfg.fieldMap.dateField.replace(/[^a-z0-9_]/gi, "");
+  const params = new URLSearchParams({
+    $where: `${dateField} >= '${window.from}' AND ${dateField} < '${window.to}'`,
+    $limit: String(limit),
+    $order: `${dateField} DESC`,
+  });
+  const headers: Record<string, string> = cfg.apiKey ? { "X-App-Token": cfg.apiKey } : {};
+  const raw = await vendorFetch(`${cfg.baseUrl}?${params}`, { headers });
+  const source = JSON.parse(raw) as Record<string, unknown>[];
+  if (!Array.isArray(source)) throw new Error("socrata_unexpected_payload");
+
+  const NUMERIC = new Set(["price", "principal", "valuation", "amount", "ratePct", "termMonths"]);
+  const rows = source.map((src) => {
+    const out: Record<string, unknown> = {};
+    for (const [ours, theirs] of Object.entries(cfg.fieldMap!.map!)) {
+      let v: unknown = theirs.startsWith("=") ? theirs.slice(1) : src[theirs];
+      if (typeof v === "string") {
+        if (NUMERIC.has(ours)) v = Number(v.replace(/[$,]/g, ""));
+        else if (ours === "isCash") v = v === "true" || v === "1" || v === "Y";
+        else if (/At$|Date$/.test(ours) && v.length >= 10) v = v.slice(0, 10);
+      }
+      out[ours] = v ?? null;
+    }
+    return out;
+  });
+  return { raw, rows };
+}
+
 /* ------------------------- entity/property resolution ------------------------- */
 
 const ENTITY_SUFFIX = /\b(LLC|L\.L\.C\.|LP|LLP|INC|CORP|TRUST|LTD)\b/i;
 
-function normalizeName(name: string): string {
+export function normalizeName(name: string): string {
   return name.toUpperCase().replace(/[.,]/g, "").replace(/\s+/g, " ").trim();
 }
 
@@ -193,12 +252,15 @@ async function resolveProperty(env: Env, rec: AddressRec): Promise<string> {
 
 /* ------------------------------ record upserts ------------------------------ */
 
+const PROV_COLS = ", source_id, source_url, source_method, confidence, ingested_at";
+const provBinds = (p: Provenance) => [p.sourceId, p.sourceUrl, p.method, p.confidence];
+
 interface DeedRec extends AddressRec {
   docNumber: string; price: number; isCash: boolean; deedType?: string | null;
   buyerName: string; sellerName: string; recordedAt: string;
 }
 
-async function upsertDeeds(env: Env, rows: DeedRec[]): Promise<{ ingested: number; skipped: number }> {
+async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   for (const r of rows) {
     if (!r?.docNumber || !r.address || !r.buyerName) { skipped++; continue; }
@@ -206,15 +268,17 @@ async function upsertDeeds(env: Env, rows: DeedRec[]): Promise<{ ingested: numbe
     const entityId = await resolveEntity(env, r.buyerName);
     const res = await env.DB.prepare(
       `INSERT OR IGNORE INTO transactions
-         (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name, recorded_at, doc_number, origin)
-       VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live')`
+         (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name, recorded_at, doc_number, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13, ?14, datetime('now'))`
     )
       .bind(
         `trx_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, Math.round(r.price || 0),
-        r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName, r.recordedAt, r.docNumber
+        r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName, r.recordedAt, r.docNumber,
+        ...provBinds(prov)
       )
       .run();
-    if (res.meta.changes) ingested++; else skipped++;
+    if (res.meta.changes) ingested++;
+    else { skipped++; await corroborate(env, "transactions", r.docNumber, prov.method); }
   }
   return { ingested, skipped };
 }
@@ -225,7 +289,7 @@ interface LoanRec extends AddressRec {
   maturityDate?: string | null; borrowerName: string;
 }
 
-async function upsertLoans(env: Env, rows: LoanRec[]): Promise<{ ingested: number; skipped: number }> {
+async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   const allowedTypes = new Set(["private", "hard_money", "bank", "credit_union", "seller"]);
   for (const r of rows) {
@@ -236,16 +300,17 @@ async function upsertLoans(env: Env, rows: LoanRec[]): Promise<{ ingested: numbe
     const res = await env.DB.prepare(
       `INSERT OR IGNORE INTO loans
          (id, property_id, entity_id, lender_name, lender_type, principal, rate_pct,
-          originated_at, term_months, maturity_date, doc_number, origin)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'live')`
+          originated_at, term_months, maturity_date, doc_number, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'live', ?12, ?13, ?14, ?15, datetime('now'))`
     )
       .bind(
         `lon_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.lenderName, lenderType,
         Math.round(r.principal || 0), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
-        r.maturityDate ?? null, r.docNumber
+        r.maturityDate ?? null, r.docNumber, ...provBinds(prov)
       )
       .run();
-    if (res.meta.changes) ingested++; else skipped++;
+    if (res.meta.changes) ingested++;
+    else { skipped++; await corroborate(env, "loans", r.docNumber, prov.method); }
   }
   return { ingested, skipped };
 }
@@ -255,7 +320,7 @@ interface PermitRec extends AddressRec {
   filedAt: string; status?: string | null; contractor?: string | null; ownerName: string;
 }
 
-async function upsertPermits(env: Env, rows: PermitRec[]): Promise<{ ingested: number; skipped: number }> {
+async function upsertPermits(env: Env, rows: PermitRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   const types = new Set(["ground_up", "structural", "addition", "demo", "remodel", "pool", "solar", "other"]);
   for (const r of rows) {
@@ -264,13 +329,14 @@ async function upsertPermits(env: Env, rows: PermitRec[]): Promise<{ ingested: n
     const entityId = await resolveEntity(env, r.ownerName);
     const res = await env.DB.prepare(
       `INSERT OR IGNORE INTO permits
-         (id, property_id, entity_id, permit_no, permit_type, description, valuation, filed_at, status, contractor, origin)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live')`
+         (id, property_id, entity_id, permit_no, permit_type, description, valuation, filed_at, status, contractor, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13, ?14, datetime('now'))`
     )
       .bind(
         `pmt_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.permitNo,
         types.has(r.permitType) ? r.permitType : "other", r.description ?? null,
-        Math.round(r.valuation || 0), r.filedAt, r.status ?? "filed", r.contractor ?? null
+        Math.round(r.valuation || 0), r.filedAt, r.status ?? "filed", r.contractor ?? null,
+        ...provBinds(prov)
       )
       .run();
     if (res.meta.changes) ingested++; else skipped++;
@@ -283,23 +349,110 @@ interface LienRec extends AddressRec {
   filedAt: string; ownerName: string;
 }
 
-async function upsertLiens(env: Env, rows: LienRec[]): Promise<{ ingested: number; skipped: number }> {
+const LIEN_TYPES = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens", "violation", "auction"]);
+
+function makeLienUpserter(defaultType: string) {
+  return async (env: Env, rows: LienRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> => {
+    let ingested = 0, skipped = 0;
+    for (const r of rows) {
+      if (!r?.docNumber || !r.address || !r.claimant) { skipped++; continue; }
+      const propertyId = await resolveProperty(env, r);
+      const entityId = await resolveEntity(env, r.ownerName);
+      const res = await env.DB.prepare(
+        `INSERT OR IGNORE INTO liens
+           (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number, origin${PROV_COLS})
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'live', ?9, ?10, ?11, ?12, datetime('now'))`
+      )
+        .bind(
+          `lin_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId,
+          LIEN_TYPES.has(r.lienType ?? "") ? r.lienType! : defaultType, r.claimant,
+          Math.round(r.amount || 0), r.filedAt, r.docNumber, ...provBinds(prov)
+        )
+        .run();
+      if (res.meta.changes) ingested++;
+      else { skipped++; await corroborate(env, "liens", r.docNumber, prov.method); }
+    }
+    return { ingested, skipped };
+  };
+}
+
+interface SatisfactionRec {
+  docNumber: string; originalDocNumber?: string | null; lenderName: string;
+  borrowerName: string; satisfiedAt: string;
+}
+
+/** Satisfactions close the loan lifecycle: match → paid_off + satisfied_at. */
+async function applySatisfactions(env: Env, rows: SatisfactionRec[], _prov: Provenance): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
-  const types = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens"]);
   for (const r of rows) {
-    if (!r?.docNumber || !r.address || !r.claimant) { skipped++; continue; }
-    const propertyId = await resolveProperty(env, r);
-    const entityId = await resolveEntity(env, r.ownerName);
+    if (!r?.lenderName || !r.satisfiedAt) { skipped++; continue; }
+    let res;
+    if (r.originalDocNumber) {
+      res = await env.DB.prepare(
+        `UPDATE loans SET status = 'paid_off', satisfied_at = ?1
+         WHERE doc_number = ?2 AND status = 'active'`
+      ).bind(r.satisfiedAt, r.originalDocNumber).run();
+    } else {
+      res = await env.DB.prepare(
+        `UPDATE loans SET status = 'paid_off', satisfied_at = ?1
+         WHERE id = (
+           SELECT l.id FROM loans l JOIN entities e ON e.id = l.entity_id
+           WHERE l.status = 'active' AND l.lender_name = ?2 AND e.name = ?3
+           ORDER BY l.originated_at DESC LIMIT 1)`
+      ).bind(r.satisfiedAt, r.lenderName, normalizeName(r.borrowerName ?? "")).run();
+    }
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped };
+}
+
+interface UccRec {
+  fileNumber: string; securedParty: string; debtorName: string; filedAt: string;
+  address?: string | null; city?: string | null; county?: string | null; state?: string | null;
+  collateral?: string | null;
+}
+
+/** UCC filings — competitor loan activity that never hits the mortgage rolls. */
+async function upsertUcc(env: Env, rows: UccRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
+  let ingested = 0, skipped = 0;
+  for (const r of rows) {
+    if (!r?.fileNumber || !r.securedParty || !r.debtorName) { skipped++; continue; }
+    const propertyId = r.address && r.city && r.county && r.state
+      ? await resolveProperty(env, { address: r.address, city: r.city, county: r.county, state: r.state })
+      : null;
+    const entityId = await resolveEntity(env, r.debtorName);
     const res = await env.DB.prepare(
-      `INSERT OR IGNORE INTO liens
-         (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number, origin)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'live')`
+      `INSERT OR IGNORE INTO loans
+         (id, property_id, entity_id, lender_name, lender_type, principal, originated_at, term_months, doc_number, instrument, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, ?4, 'private', 0, ?5, NULL, ?6, 'ucc', 'live', ?7, ?8, ?9, ?10, datetime('now'))`
     )
       .bind(
-        `lin_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId,
-        types.has(r.lienType ?? "") ? r.lienType! : "mechanics", r.claimant,
-        Math.round(r.amount || 0), r.filedAt, r.docNumber
+        `ucc_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.securedParty,
+        r.filedAt, r.fileNumber, ...provBinds(prov)
       )
+      .run();
+    if (res.meta.changes) ingested++; else skipped++;
+  }
+  return { ingested, skipped };
+}
+
+interface CorpRec {
+  entityName: string; formationDate?: string | null; registeredAgent?: string | null;
+  county?: string | null; status?: string | null;
+}
+
+/** Corporation registry — enriches known entities; never creates new ones. */
+async function applyCorpRegistry(env: Env, rows: CorpRec[], _prov: Provenance): Promise<{ ingested: number; skipped: number }> {
+  let ingested = 0, skipped = 0;
+  for (const r of rows) {
+    if (!r?.entityName) { skipped++; continue; }
+    const res = await env.DB.prepare(
+      `UPDATE entities SET
+         formation_date = COALESCE(formation_date, ?1),
+         registered_agent = COALESCE(registered_agent, ?2)
+       WHERE name = ?3 AND (formation_date IS NULL OR registered_agent IS NULL)`
+    )
+      .bind(r.formationDate ?? null, r.registeredAgent ?? null, normalizeName(r.entityName))
       .run();
     if (res.meta.changes) ingested++; else skipped++;
   }
@@ -308,37 +461,94 @@ async function upsertLiens(env: Env, rows: LienRec[]): Promise<{ ingested: numbe
 
 /* ------------------------------ connectors ------------------------------ */
 
-type Upserter = (env: Env, rows: never[]) => Promise<{ ingested: number; skipped: number }>;
+type Upserter = (env: Env, rows: never[], prov: Provenance) => Promise<{ ingested: number; skipped: number }>;
 
-const RECORD_CONNECTORS: Record<string, { path: string; upsert: Upserter }> = {
-  county_deeds: { path: "deeds", upsert: upsertDeeds as Upserter },
-  county_loans: { path: "loans", upsert: upsertLoans as Upserter },
-  permits: { path: "permits", upsert: upsertPermits as Upserter },
-  liens: { path: "liens", upsert: upsertLiens as Upserter },
+interface ConnectorDef {
+  path: string;              // vendor-contract path segment
+  kind: string;              // validation gate kind
+  upsert: Upserter;
+}
+
+export const RECORD_CONNECTORS: Record<string, ConnectorDef> = {
+  county_deeds: { path: "deeds", kind: "deed", upsert: upsertDeeds as Upserter },
+  county_loans: { path: "loans", kind: "loan", upsert: upsertLoans as Upserter },
+  permits: { path: "permits", kind: "permit", upsert: upsertPermits as Upserter },
+  liens: { path: "liens", kind: "lien", upsert: makeLienUpserter("mechanics") as Upserter },
+  lis_pendens: { path: "liens", kind: "lien", upsert: makeLienUpserter("lis_pendens") as Upserter },
+  violations: { path: "liens", kind: "lien", upsert: makeLienUpserter("violation") as Upserter },
+  tax_liens: { path: "liens", kind: "lien", upsert: makeLienUpserter("tax") as Upserter },
+  auctions: { path: "liens", kind: "lien", upsert: makeLienUpserter("auction") as Upserter },
+  satisfactions: { path: "satisfactions", kind: "satisfaction", upsert: applySatisfactions as Upserter },
+  ucc_filings: { path: "ucc", kind: "ucc", upsert: upsertUcc as Upserter },
+  corp_registry: { path: "corporations", kind: "corp", upsert: applyCorpRegistry as Upserter },
 };
 
-/** API or scrape+AI — both produce normalized records for the same upsert. */
-async function runRecordConnector(
+/**
+ * Shared acquisition + integrity path. Used by both daily pulls and the
+ * historical backfill (which passes an explicit date window).
+ */
+export async function acquireAndIngest(
   env: Env,
   cfg: ConnectorCfg,
-  markets: string[]
+  markets: string[],
+  window?: { from: string; to: string }
 ): Promise<ConnectorResult> {
   const def = RECORD_CONNECTORS[cfg.id];
   let raw: string;
-  let rows: never[];
+  let rows: Record<string, unknown>[];
+  let method: Provenance["method"];
+  let confidence: Provenance["confidence"];
+  let sourceUrl: string | null;
+  let groundingQuarantined = 0;
 
   if (cfg.mode === "scrape") {
     if (!cfg.scrapeUrl) throw new Error("scrape_url_missing");
+    method = "scrape";
+    confidence = "extracted";
+    sourceUrl = cfg.scrapeUrl;
     raw = await renderPageMarkdown(env, cfg.scrapeUrl);
-    rows = (await extractRecords(env, cfg.id, raw, markets, cfg.notes)) as never[];
+    const extracted = ((await extractRecords(env, cfg.id, raw, markets, cfg.notes)) as Record<string, unknown>[]).slice(0, 25);
+    // Grounding pass: records that can't prove their values in the page are quarantined.
+    const grounded = await verifyGrounding(env, extracted, raw);
+    rows = [];
+    for (let i = 0; i < extracted.length; i++) {
+      if (grounded[i]) rows.push(extracted[i]);
+      else {
+        await env.DB.prepare(
+          `INSERT INTO quarantine (id, connector, record_kind, payload_json, reasons_json, source_url)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
+        )
+          .bind(
+            `qtn_${crypto.randomUUID().slice(0, 12)}`, cfg.id, def.kind,
+            JSON.stringify(extracted[i]).slice(0, 8_000),
+            JSON.stringify(["failed grounding verification against the source page"]),
+            cfg.scrapeUrl
+          )
+          .run();
+      }
+    }
+    groundingQuarantined = extracted.length - rows.length;
   } else {
     if (!cfg.baseUrl) throw new Error("base_url_missing");
-    raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: authHeaders(cfg) });
-    rows = JSON.parse(raw) as never[];
+    method = "api";
+    confidence = "direct";
+    sourceUrl = cfg.baseUrl;
+    if (isSocrataUrl(cfg.baseUrl)) {
+      const w = window ?? { from: sinceDate(), to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10) };
+      const result = await socrataFetch(cfg, w);
+      raw = result.raw;
+      rows = result.rows;
+    } else {
+      raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: authHeaders(cfg) });
+      rows = JSON.parse(raw) as Record<string, unknown>[];
+    }
   }
 
-  const { ingested, skipped } = await def.upsert(env, rows);
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
+  const { valid, quarantined } = await gateRecords(env, cfg.id, def.kind, rows, markets, sourceUrl);
+  const prov: Provenance = { sourceId: cfg.id, sourceUrl, method, confidence };
+  const { ingested, skipped } = await def.upsert(env, valid as never[], prov);
+  await recordSourceStats(env, cfg.id, ingested, quarantined + groundingQuarantined);
+  return { ingested, skipped: skipped + quarantined + groundingQuarantined, checksum: await sha256Hex(raw) };
 }
 
 /** Contact enrichment (Apollo-compatible API). */
@@ -382,20 +592,24 @@ async function runSkipTrace(env: Env, cfg: ConnectorCfg): Promise<ConnectorResul
   return { ingested, skipped, checksum: await sha256Hex(raw) };
 }
 
-export const CONNECTOR_IDS = ["county_deeds", "county_loans", "permits", "liens", "skip_trace"] as const;
+export const CONNECTOR_IDS = [
+  "county_deeds", "county_loans", "permits", "liens",
+  "lis_pendens", "violations", "tax_liens", "auctions",
+  "satisfactions", "ucc_filings", "corp_registry", "skip_trace",
+] as const;
 
-function connectorRunnable(cfg: ConnectorCfg): boolean {
+export function connectorRunnable(cfg: ConnectorCfg): boolean {
   if (!cfg.enabled) return false;
   return cfg.mode === "scrape" ? Boolean(cfg.scrapeUrl) : Boolean(cfg.baseUrl);
 }
 
 async function runConnector(env: Env, cfg: ConnectorCfg, markets: string[]): Promise<ConnectorResult> {
-  return cfg.id === "skip_trace" ? runSkipTrace(env, cfg) : runRecordConnector(env, cfg, markets);
+  return cfg.id === "skip_trace" ? runSkipTrace(env, cfg) : acquireAndIngest(env, cfg, markets);
 }
 
 /* ------------------------------ orchestration ------------------------------ */
 
-async function runWithAudit(
+export async function runWithAudit(
   env: Env,
   name: string,
   run: () => Promise<ConnectorResult>
@@ -458,6 +672,18 @@ export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promis
 
   await runWithAudit(env, "scoring", async () => ({
     ingested: await rescoreTriggers(env),
+    skipped: 0,
+    checksum: null,
+  }));
+
+  // Operator-defined rules and duplicate-entity detection run on fresh data.
+  await runWithAudit(env, "custom_signals", async () => ({
+    ingested: await evaluateCustomSignals(env),
+    skipped: 0,
+    checksum: null,
+  }));
+  await runWithAudit(env, "resolution", async () => ({
+    ingested: await generateMergeSuggestions(env),
     skipped: 0,
     checksum: null,
   }));

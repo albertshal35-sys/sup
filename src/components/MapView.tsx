@@ -19,7 +19,8 @@ const KIND_OPTIONS: SelectOption<"all" | TriggerKind>[] = [
   { value: "maturity", label: "Maturities" },
   { value: "cash_poor", label: "Cash-poor buys" },
   { value: "permit", label: "Permits" },
-  { value: "lien", label: "Liens" },
+  { value: "lien", label: "Distress" },
+  { value: "custom", label: "Your signals" },
 ];
 
 const URGENCY_COLOR: Record<TriggerItem["urgency"], string> = {
@@ -33,19 +34,20 @@ export function MapView() {
   const cashPoor = useVisibleFeed("cash_poor");
   const permit = useVisibleFeed("permit");
   const lien = useVisibleFeed("lien");
+  const custom = useVisibleFeed("custom");
   const openResume = useApp((s) => s.openResume);
   const theme = useApp((s) => s.theme);
   const [kind, setKind] = useState<"all" | TriggerKind>("all");
 
   const items = useMemo(() => {
-    const all = [...maturity, ...cashPoor, ...permit, ...lien];
+    const all = [...maturity, ...cashPoor, ...permit, ...lien, ...custom];
     return all.filter(
       (t) =>
         t.property?.lat != null &&
         t.property?.lng != null &&
         (kind === "all" || t.kind === kind)
     );
-  }, [maturity, cashPoor, permit, lien, kind]);
+  }, [maturity, cashPoor, permit, lien, custom, kind]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);

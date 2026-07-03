@@ -102,7 +102,12 @@ CREATE TABLE IF NOT EXISTS transactions (
   recorded_at  TEXT NOT NULL,                    -- county recording date
   doc_number   TEXT,
   source       TEXT NOT NULL DEFAULT 'county_recorder',
-  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo'))
+  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
+  source_id    TEXT,                             -- connector that produced the row
+  source_url   TEXT,                             -- link to the source document
+  source_method TEXT,                            -- api | scrape | seed | manual
+  confidence   TEXT NOT NULL DEFAULT 'direct',   -- corroborated | direct | extracted
+  ingested_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_doc ON transactions(doc_number) WHERE doc_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tx_entity_date ON transactions(entity_id, recorded_at DESC);
@@ -113,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_tx_cash_recent ON transactions(is_cash, recorded_
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS loans (
   id             TEXT PRIMARY KEY,
-  property_id    TEXT NOT NULL REFERENCES properties(id),
+  property_id    TEXT REFERENCES properties(id),  -- nullable: UCC filings may carry no property
   entity_id      TEXT REFERENCES entities(id),
   lender_name    TEXT NOT NULL,
   lender_type    TEXT NOT NULL DEFAULT 'private' CHECK (lender_type IN ('private','hard_money','bank','credit_union','seller')),
@@ -126,7 +131,14 @@ CREATE TABLE IF NOT EXISTS loans (
   status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paid_off','defaulted','refinanced')),
   doc_number     TEXT,
   source         TEXT NOT NULL DEFAULT 'county_recorder',
-  origin         TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo'))
+  origin         TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
+  source_id      TEXT,
+  source_url     TEXT,
+  source_method  TEXT,
+  confidence     TEXT NOT NULL DEFAULT 'direct',
+  ingested_at    TEXT,
+  satisfied_at   TEXT,                           -- set by the satisfactions connector
+  instrument     TEXT NOT NULL DEFAULT 'mortgage' -- mortgage | ucc
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_loans_doc ON loans(doc_number) WHERE doc_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_loans_origination ON loans(status, originated_at);
@@ -148,7 +160,12 @@ CREATE TABLE IF NOT EXISTS permits (
   status       TEXT NOT NULL DEFAULT 'filed' CHECK (status IN ('filed','issued','in_review','expired','finaled')),
   contractor   TEXT,
   source       TEXT NOT NULL DEFAULT 'municipal_portal',
-  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo'))
+  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
+  source_id    TEXT,
+  source_url   TEXT,
+  source_method TEXT,
+  confidence   TEXT NOT NULL DEFAULT 'direct',
+  ingested_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_permits_no ON permits(permit_no, property_id);
 CREATE INDEX IF NOT EXISTS idx_permits_filed ON permits(filed_at DESC);
@@ -161,14 +178,19 @@ CREATE TABLE IF NOT EXISTS liens (
   id           TEXT PRIMARY KEY,
   property_id  TEXT NOT NULL REFERENCES properties(id),
   entity_id    TEXT REFERENCES entities(id),
-  lien_type    TEXT NOT NULL DEFAULT 'mechanics' CHECK (lien_type IN ('mechanics','tax','hoa','judgment','lis_pendens')),
+  lien_type    TEXT NOT NULL DEFAULT 'mechanics' CHECK (lien_type IN ('mechanics','tax','hoa','judgment','lis_pendens','violation','auction')),
   claimant     TEXT NOT NULL,                    -- the contractor/sub filing
   amount       INTEGER NOT NULL,
   filed_at     TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','released','disputed','foreclosing')),
   doc_number   TEXT,
   source       TEXT NOT NULL DEFAULT 'county_recorder',
-  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo'))
+  origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
+  source_id    TEXT,
+  source_url   TEXT,
+  source_method TEXT,
+  confidence   TEXT NOT NULL DEFAULT 'direct',
+  ingested_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_liens_doc ON liens(doc_number) WHERE doc_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_liens_filed ON liens(status, filed_at DESC);
@@ -179,7 +201,7 @@ CREATE INDEX IF NOT EXISTS idx_liens_filed ON liens(status, filed_at DESC);
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS triggers (
   id           TEXT PRIMARY KEY,
-  kind         TEXT NOT NULL CHECK (kind IN ('maturity','cash_poor','permit','lien')),
+  kind         TEXT NOT NULL CHECK (kind IN ('maturity','cash_poor','permit','lien','custom')),
   entity_id    TEXT NOT NULL REFERENCES entities(id),
   property_id  TEXT REFERENCES properties(id),
   ref_id       TEXT,                             -- id of the loan/permit/lien row that fired
@@ -284,6 +306,7 @@ CREATE TABLE IF NOT EXISTS connector_config (
   api_key_ct    TEXT,                  -- base64 ciphertext
   api_key_iv    TEXT,                  -- base64 IV
   api_key_last4 TEXT,
+  field_map     TEXT,                  -- JSON: {"dateField": "...", "map": {ours: theirs}} for Socrata sources
   mode          TEXT NOT NULL DEFAULT 'api' CHECK (mode IN ('api','scrape')),
   scrape_url    TEXT,                  -- portal search/results URL for headless scraping
   notes         TEXT,                  -- operator notes fed to the AI normalizer
@@ -294,7 +317,95 @@ INSERT OR IGNORE INTO connector_config (id, label) VALUES
   ('county_loans', 'County recorder — deeds of trust'),
   ('permits', 'Municipal permits'),
   ('liens', 'Mechanics liens'),
-  ('skip_trace', 'Contact enrichment (Apollo-compatible)');
+  ('skip_trace', 'Contact enrichment (Apollo-compatible)'),
+  ('satisfactions', 'Mortgage satisfactions'),
+  ('lis_pendens',   'Lis pendens / pre-foreclosure'),
+  ('violations',    'DOB & ECB violations'),
+  ('tax_liens',     'Tax lien sale list'),
+  ('auctions',      'Foreclosure auctions'),
+  ('ucc_filings',   'UCC filings'),
+  ('corp_registry', 'Corporation registry');
+
+-- ------------------------------------------------------------
+-- Data-integrity infrastructure: quarantine for records that fail
+-- validation gates, per-source daily stats for freshness/anomaly
+-- monitoring, and entity merge suggestions from resolution.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS quarantine (
+  id           TEXT PRIMARY KEY,
+  connector    TEXT NOT NULL,
+  record_kind  TEXT NOT NULL,                    -- deed | loan | permit | lien | satisfaction | ucc | corp
+  payload_json TEXT NOT NULL,                    -- the rejected record, verbatim
+  reasons_json TEXT NOT NULL,                    -- JSON array of failed checks
+  source_url   TEXT,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','discarded')),
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_quarantine_status ON quarantine(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS source_stats (
+  connector        TEXT NOT NULL,
+  day              TEXT NOT NULL,               -- YYYY-MM-DD
+  rows_ingested    INTEGER NOT NULL DEFAULT 0,
+  rows_quarantined INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (connector, day)
+);
+
+CREATE TABLE IF NOT EXISTS merge_suggestions (
+  id         TEXT PRIMARY KEY,
+  entity_a   TEXT NOT NULL REFERENCES entities(id),
+  entity_b   TEXT NOT NULL REFERENCES entities(id),
+  reason     TEXT NOT NULL,
+  score      REAL NOT NULL DEFAULT 0,
+  status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','merged','dismissed')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (entity_a, entity_b)
+);
+
+-- ------------------------------------------------------------
+-- Custom signals (plain-English rules compiled to deterministic
+-- JSON by the AI, evaluated after every pull), the lender's own
+-- loan book, and historical backfill progress.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS custom_signals (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  prompt      TEXT NOT NULL,
+  rule_json   TEXT NOT NULL,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  last_run_at TEXT,
+  total_hits  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS loan_book (
+  id               TEXT PRIMARY KEY,
+  entity_id        TEXT REFERENCES entities(id),
+  borrower_name    TEXT NOT NULL,
+  property_address TEXT,
+  principal        INTEGER NOT NULL,
+  rate_pct         REAL NOT NULL,
+  points           REAL,
+  originated_at    TEXT NOT NULL,
+  term_months      INTEGER NOT NULL DEFAULT 12,
+  maturity_date    TEXT,
+  status           TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current','late','extended','paid_off','defaulted')),
+  notes            TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_loan_book_maturity ON loan_book(status, maturity_date);
+
+CREATE TABLE IF NOT EXISTS backfill_state (
+  connector   TEXT PRIMARY KEY,
+  cursor_date TEXT,
+  target_date TEXT,
+  status      TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('idle','running','done','error')),
+  rows_total  INTEGER NOT NULL DEFAULT 0,
+  error       TEXT,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- ------------------------------------------------------------
 -- Hardened ingestion audit log: one row per connector per run.

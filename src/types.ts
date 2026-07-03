@@ -1,4 +1,14 @@
-export type TriggerKind = "maturity" | "cash_poor" | "permit" | "lien";
+export type TriggerKind = "maturity" | "cash_poor" | "permit" | "lien" | "custom";
+
+/** How much to trust a record: two independent sources > API > AI-extracted. */
+export type RecordConfidence = "corroborated" | "direct" | "extracted";
+
+export interface RecordProvenance {
+  sourceId: string | null;
+  sourceUrl: string | null;
+  sourceMethod: string | null; // api | scrape | seed | manual
+  confidence: RecordConfidence;
+}
 export type Urgency = "critical" | "hot" | "warm";
 export type TriggerStatus = "new" | "viewed" | "contacted" | "dismissed" | "converted";
 
@@ -79,6 +89,7 @@ export interface ResumeLoan {
   maturityDate: string | null;
   status: string;
   address: string;
+  provenance?: RecordProvenance | null;
 }
 
 export interface ResumeContact {
@@ -182,6 +193,8 @@ export interface ConnectorInfo {
   baseUrl: string | null;
   scrapeUrl: string | null;
   notes: string | null;
+  fieldMap: string | null;
+  isSocrata: boolean;
   apiKeyLast4: string | null;
   lastRun: { status: string; finishedAt: string | null; rowsIngested: number } | null;
 }
@@ -192,4 +205,114 @@ export interface IngestionRun {
   finishedAt: string;
   rowsIngested: number;
   attempts: number;
+}
+
+/* --------------------- competitor intelligence --------------------- */
+
+export interface LenderRow {
+  lenderName: string;
+  loans: number;
+  uccFilings: number;
+  volume: number;
+  avgRate: number | null;
+  maturing90d: number;
+  maturingVolume: number;
+  payoffs90d: number;
+}
+
+export interface LenderLoan {
+  id: string;
+  principal: number;
+  ratePct: number | null;
+  originatedAt: string;
+  maturity: string | null;
+  status: string;
+  instrument: string;
+  entityId: string | null;
+  entityName: string | null;
+  flips36mo: number | null;
+  velocityScore: number | null;
+  address: string | null;
+  city: string | null;
+  sourceUrl: string | null;
+  confidence: RecordConfidence;
+}
+
+/* --------------------------- loan book --------------------------- */
+
+export type LoanBookStatus = "current" | "late" | "extended" | "paid_off" | "defaulted";
+
+export interface LoanBookEntry {
+  id: string;
+  entityId: string | null;
+  entityName?: string | null;
+  borrowerName: string;
+  propertyAddress: string | null;
+  principal: number;
+  ratePct: number;
+  points: number | null;
+  originatedAt: string;
+  termMonths: number;
+  maturityDate: string | null;
+  status: LoanBookStatus;
+  notes: string | null;
+}
+
+/* ------------------------- data integrity ------------------------- */
+
+export interface QuarantineRow {
+  id: string;
+  connector: string;
+  recordKind: string;
+  payload: Record<string, unknown>;
+  reasons: string[];
+  sourceUrl: string | null;
+  createdAt: string;
+}
+
+export interface MergeSuggestion {
+  id: string;
+  nameA: string;
+  nameB: string;
+  reason: string;
+  score: number;
+}
+
+export interface SourceAnomaly {
+  connector: string;
+  today: number;
+  baseline: number;
+}
+
+export interface DataQuality {
+  pendingQuarantine: number;
+  quarantined7d: number;
+  ingested7d: number;
+  anomalies: SourceAnomaly[];
+  quarantine: QuarantineRow[];
+  merges: MergeSuggestion[];
+}
+
+/* ------------------------- custom signals ------------------------- */
+
+export interface CustomSignal {
+  id: string;
+  name: string;
+  prompt: string;
+  rule: Record<string, unknown>;
+  enabled: boolean;
+  lastRunAt: string | null;
+  totalHits: number;
+}
+
+/* --------------------------- backfill --------------------------- */
+
+export interface BackfillRow {
+  connector: string;
+  status: "idle" | "running" | "done" | "error";
+  cursorDate: string | null;
+  targetDate: string | null;
+  rowsTotal: number;
+  error: string | null;
+  pctComplete: number;
 }
