@@ -14,3 +14,6 @@ INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_gateway_id', '');
 
 -- Relabel skip-trace as contact enrichment (Apollo-compatible)
 UPDATE connector_config SET label = 'Contact enrichment (Apollo-compatible)' WHERE id = 'skip_trace';
+
+-- Home markets: the five NYC boroughs (county names as recorded on deeds)
+UPDATE app_settings SET value = '["Kings, NY","Queens, NY","Bronx, NY","New York, NY","Richmond, NY"]', updated_at = datetime('now') WHERE key = 'markets';

@@ -35,26 +35,26 @@ function StatusPill({ status }: { status: string }) {
   return <span className={classNames("text-2xs font-medium capitalize", tone)}>{status}</span>;
 }
 
-/** Known public sources worth scraping per connector — starting points. */
+/** NYC-first sources per connector. ACRIS + DOB publish free Socrata APIs
+    on NYC Open Data — prefer API mode there; scrape covers the rest. */
 const SUGGESTED_SOURCES: Record<string, string[]> = {
   county_deeds: [
-    "Maricopa County Recorder — recorder.maricopa.gov/recdocdata",
-    "Travis County Clerk — countyclerk.traviscountytx.gov (Official Public Records search)",
-    "Miami-Dade Clerk — onlineservices.miamidadeclerk.gov/officialrecords",
-    "Hillsborough ORI — pubrec.hillsclerk.com",
+    "★ NYC Open Data (free API) — ACRIS Real Property Master + Legals + Parties, data.cityofnewyork.us — covers Manhattan, Brooklyn, Queens, Bronx",
+    "ACRIS document search (scrape) — a836-acris.nyc.gov",
+    "Staten Island: Richmond County Clerk (scrape) — richmondcountyclerk.com",
   ],
   county_loans: [
-    "Same recorder portals as deeds — search document type: DEED OF TRUST / MORTGAGE",
-    "API alternative: ATTOM, DataTree, or PropertyRadar vendor feeds",
+    "★ Same ACRIS Open Data datasets filtered to doc type MTGE / AGMT (mortgages & agreements)",
+    "ACRIS document search (scrape) for recorded mortgage docs incl. lender + amount",
   ],
   permits: [
-    "Phoenix — apps-secure.phoenix.gov/PDD/Search (Accela)",
-    "Austin — abc.austintexas.gov/web/permit/public-search-other",
-    "Miami-Dade — miamidade.gov/permits (Regulatory & Economic Resources)",
-    "API alternative: Shovels.ai permit API",
+    "★ NYC Open Data (free API) — DOB NOW: Build Job Application Filings + DOB Permit Issuance",
+    "DOB NOW / BIS portals (scrape) — a810-dobnow.nyc.gov",
+    "Alteration Type 1/2 + New Building (NB) filings = your ground-up & structural signals",
   ],
   liens: [
-    "Recorder portals above — document type: MECHANICS LIEN / CLAIM OF LIEN / LIS PENDENS",
+    "Mechanics liens are filed with each borough's County Clerk — scrape the clerk minutes/indexes",
+    "ACRIS captures many NYC lien documents — filter doc class LIEN / UCC",
   ],
   skip_trace: [
     "Apollo.io (api.apollo.io) — people/organization match",
@@ -146,7 +146,7 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
               onBlur={() => {
                 if (scrapeUrl !== (connector.scrapeUrl ?? "")) void save({ scrapeUrl });
               }}
-              placeholder="https://recorder.maricopa.gov/recdocdata/…"
+              placeholder="https://a836-acris.nyc.gov/DS/DocumentSearch/…"
             />
           </div>
         ) : (

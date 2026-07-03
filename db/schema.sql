@@ -263,7 +263,7 @@ INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'live');
 INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_model', '@cf/moonshotai/kimi-k2.6');
 INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_gateway_id', '');
 INSERT OR IGNORE INTO app_settings (key, value) VALUES
-  ('markets', '["Maricopa, AZ","Travis, TX","Miami-Dade, FL","Hillsborough, FL"]');
+  ('markets', '["Kings, NY","Queens, NY","Bronx, NY","New York, NY","Richmond, NY"]');
 
 -- ------------------------------------------------------------
 -- Vendor connector configuration. API keys are AES-GCM encrypted
