@@ -17,7 +17,7 @@ export const UNDERWRITING_FALLBACK: UnderwritingDefaults = {
   termMonths: 12,
   maxLtv: 70,
   minLoan: 100_000,
-  lenderName: "Allura Capital",
+  lenderName: "LienWolf Lending",
   validDays: 7,
 };
 

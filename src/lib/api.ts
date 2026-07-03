@@ -206,15 +206,18 @@ export async function getKpis(mode: Mode = "offline"): Promise<Kpis> {
 }
 
 export async function getIngestionStatus(mode: Mode = "offline"): Promise<IngestionRun[]> {
+  // Pipeline status is infrastructure truth, not demo content: whenever the
+  // Worker is reachable, show its real run history — even when that's "none
+  // yet". Sample runs appear only in offline preview.
   if (mode !== "offline") {
     const live = await tryFetch<{ lastRuns: Array<{ connector: string; status: IngestionRun["status"]; finished_at: string; rows_ingested: number }> }>("/health");
-    if (live?.lastRuns?.length) {
-      return live.lastRuns.map((r) => ({
+    if (live) {
+      return (live.lastRuns ?? []).map((r) => ({
         connector: r.connector, status: r.status, finishedAt: r.finished_at,
         rowsIngested: r.rows_ingested, attempts: 1,
       }));
     }
-    if (mode === "live") return [];
+    return [];
   }
   return mockIngestion;
 }

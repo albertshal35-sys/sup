@@ -128,9 +128,19 @@ export function MapView() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select size="sm" className="w-44" value={kind} options={KIND_OPTIONS} onChange={setKind} />
-        <div className="flex flex-wrap items-center gap-3 text-2xs text-tx3">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <Select size="sm" className="w-44" value={kind} options={KIND_OPTIONS} onChange={setKind} />
+          <div className="flex shrink-0 items-center gap-2.5 text-2xs text-tx3">
+            {(["critical", "hot", "warm"] as const).map((u) => (
+              <span key={u} className="flex items-center gap-1 capitalize">
+                <span className="h-2 w-2 rounded-full" style={{ background: URGENCY_COLOR[u] }} />
+                {u}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-tx3">
           <span className="tabular-nums">
             <span className="font-semibold text-tx1">{items.length}</span> pins ·{" "}
             <span className="font-semibold text-tx1">{money(totalValue)}</span> in signals
@@ -139,14 +149,6 @@ export function MapView() {
           <span>{counts.cash_poor} cash-poor</span>
           <span>{counts.permit} permits</span>
           <span>{counts.lien} liens</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2.5 text-2xs text-tx3">
-          {(["critical", "hot", "warm"] as const).map((u) => (
-            <span key={u} className="flex items-center gap-1 capitalize">
-              <span className="h-2 w-2 rounded-full" style={{ background: URGENCY_COLOR[u] }} />
-              {u}
-            </span>
-          ))}
         </div>
       </div>
 

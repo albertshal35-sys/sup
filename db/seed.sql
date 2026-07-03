@@ -9,7 +9,7 @@ DELETE FROM entity_principals; DELETE FROM principals; DELETE FROM properties;
 DELETE FROM entities; DELETE FROM ingestion_runs; DELETE FROM users;
 
 INSERT INTO users (id, email, name, org_name, role) VALUES
-  ('usr_01', 'max@alluraimports.com', 'Max', 'Allura Capital', 'owner');
+  ('usr_01', 'demo@lienwolf.app', 'Demo Operator', 'LienWolf', 'owner');
 
 -- ---------- Entities ----------
 INSERT INTO entities (id, kind, name, state, formation_date, registered_agent, principal_name, flips_36mo, avg_margin_pct, avg_hold_days, volume_36mo, velocity_score) VALUES

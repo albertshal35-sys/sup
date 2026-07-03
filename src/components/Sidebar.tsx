@@ -86,10 +86,23 @@ function NavButton({ item, expanded }: { item: NavItem; expanded: boolean }) {
   );
 }
 
+/** Honest pipeline health, derived from the latest real runs. */
+function pipelineHealth(runs: { status: string }[]): { tone: string; label: string; sub: string } {
+  if (runs.length === 0)
+    return { tone: "bg-tx3", label: "Awaiting first pull", sub: "Runs weekdays 11:00 UTC" };
+  if (runs.some((r) => r.status === "error"))
+    return { tone: "bg-danger", label: "Pipeline needs attention", sub: "A source failed — see Command" };
+  if (runs.some((r) => r.status === "partial"))
+    return { tone: "bg-warn", label: "Pipeline degraded", sub: "A source returned partial data" };
+  return { tone: "animate-pulse-dot bg-ok", label: "Pipeline healthy", sub: "Next pull · weekdays 11:00 UTC" };
+}
+
 function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollapse?: boolean }) {
   const setView = useApp((s) => s.setView);
   const view = useApp((s) => s.view);
   const toggleCollapsed = useApp((s) => s.toggleCollapsed);
+  const ingestion = useApp((s) => s.ingestion);
+  const health = pipelineHealth(ingestion);
 
   return (
     <div className="flex h-full flex-col">
@@ -128,10 +141,10 @@ function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollap
         {expanded && (
           <div className="mb-1 rounded-xl border border-line bg-raised/60 px-3 py-2.5">
             <div className="flex items-center gap-1.5 text-2xs text-tx2">
-              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-ok" />
-              Pipeline healthy
+              <span className={classNames("h-1.5 w-1.5 shrink-0 rounded-full", health.tone)} />
+              {health.label}
             </div>
-            <div className="mt-0.5 text-2xs text-tx3">Next pull · weekdays 11:00 UTC</div>
+            <div className="mt-0.5 text-2xs text-tx3">{health.sub}</div>
           </div>
         )}
         <button

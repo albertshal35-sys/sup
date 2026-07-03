@@ -64,7 +64,7 @@ export function KpiStrip() {
       {KPIS.map((def, i) => (
         <div
           key={def.id}
-          className="card animate-fade-up px-4 py-3.5"
+          className="card animate-fade-up px-4 py-3.5 last:col-span-2 sm:last:col-span-1"
           style={{ animationDelay: `${i * 40}ms` }}
         >
           {kpis ? (

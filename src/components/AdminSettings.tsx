@@ -340,9 +340,9 @@ export function SettingsView() {
   const [uw, setUw] = useState<UnderwritingDefaults>(serverSettings?.underwriting ?? UNDERWRITING_FALLBACK);
   const [outreachCfg, setOutreachCfg] = useState<OutreachDefaults>(
     serverSettings?.outreach ?? {
-      senderName: "Max",
-      company: "Allura Capital",
-      signature: "Max\nAllura Capital",
+      senderName: "",
+      company: "",
+      signature: "",
       defaultChannel: "email",
     }
   );
@@ -620,6 +620,7 @@ export function SettingsView() {
             <span className="text-2xs font-medium text-tx3">Sender name</span>
             <TextField
               value={outreachCfg.senderName}
+              placeholder="Your name"
               onChange={(v) => setOutreachCfg({ ...outreachCfg, senderName: v })}
               onBlur={async () => {
                 const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
@@ -632,6 +633,7 @@ export function SettingsView() {
             <span className="text-2xs font-medium text-tx3">Company</span>
             <TextField
               value={outreachCfg.company}
+              placeholder="Your fund"
               onChange={(v) => setOutreachCfg({ ...outreachCfg, company: v })}
               onBlur={async () => {
                 const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
@@ -644,6 +646,7 @@ export function SettingsView() {
             <span className="text-2xs font-medium text-tx3">Email signature</span>
             <TextArea
               value={outreachCfg.signature}
+              placeholder={"Name\nFund · phone"}
               onChange={(v) => setOutreachCfg({ ...outreachCfg, signature: v })}
               onBlur={async () => {
                 const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
