@@ -1,0 +1,32 @@
+{
+  "name": "lienwolf",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Borrower-intent intelligence platform for private & hard money real estate lenders",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "worker:dev": "wrangler dev --config worker/wrangler.toml",
+    "db:schema": "wrangler d1 execute lienwolf-db --config worker/wrangler.toml --file db/schema.sql",
+    "db:seed": "wrangler d1 execute lienwolf-db --config worker/wrangler.toml --file db/seed.sql",
+    "deploy:worker": "wrangler deploy --config worker/wrangler.toml",
+    "deploy:pages": "npm run build && wrangler pages deploy dist --project-name lienwolf"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

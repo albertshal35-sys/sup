@@ -1,0 +1,22 @@
+name = "lienwolf-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+
+# Daily ingestion, weekdays only, 11:00 UTC (pre-market US)
+[triggers]
+crons = ["0 11 * * 1-5"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lienwolf-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+# CORS origin of the Pages frontend
+ALLOWED_ORIGIN = "*"
+
+# Secrets (set via `wrangler secret put <NAME> --config worker/wrangler.toml`):
+#   COUNTY_API_KEY      - county recorder data vendor
+#   PERMIT_API_KEY      - municipal permit aggregator
+#   SKIP_TRACE_API_KEY  - skip-trace provider
+#   WEBHOOK_SECRET      - HMAC secret for inbound record webhooks
