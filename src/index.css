@@ -101,10 +101,13 @@
 }
 
 /* Leaflet: outside @layer so Tailwind can't purge it (the class only exists
-   at runtime), !important because leaflet.css is bundled after this file. */
+   at runtime), !important because leaflet.css is bundled after this file.
+   z-index:0 creates a stacking context so leaflet's internal panes (z 400-1000)
+   can't overlay app chrome like the command palette. */
 .leaflet-container {
   font-family: inherit !important;
   background: rgb(var(--raised)) !important;
+  z-index: 0 !important;
 }
 .leaflet-container .leaflet-tile-pane {
   filter: saturate(0.85);

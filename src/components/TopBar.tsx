@@ -1,6 +1,6 @@
 import { useApp, type View } from "../store";
 import { Menu } from "./ui";
-import { IconGear, IconMenu, IconMoon, IconSearch, IconSun } from "./icons";
+import { IconGear, IconMenu, IconMoon, IconRadar, IconSearch, IconSun } from "./icons";
 import { classNames } from "../lib/format";
 
 const TITLES: Record<View, { title: string; sub: string }> = {
@@ -28,19 +28,27 @@ export function TopBar() {
   const theme = useApp((s) => s.theme);
   const toggleTheme = useApp((s) => s.toggleTheme);
   const dataMode = useApp((s) => s.dataMode);
+  const outreach = useApp((s) => s.serverSettings?.outreach);
   const t = TITLES[view];
   const mode = MODE_BADGE[dataMode];
+  const operatorName = outreach?.senderName?.trim() || "Operator";
+  const operatorOrg = outreach?.company?.trim() || "LienWolf";
 
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-xl">
-      <div className="flex h-14 items-center gap-2.5 px-3 sm:gap-3 sm:px-5 lg:px-6">
+      <div className="flex h-14 items-center gap-2 px-3 sm:gap-3 sm:px-5 lg:px-6">
         <button
           onClick={() => setMobileNav(true)}
-          className="rounded-lg p-1.5 text-tx2 hover:bg-raised md:hidden"
+          className="-ml-1 rounded-lg p-1.5 text-tx2 hover:bg-raised md:hidden"
           aria-label="Open menu"
         >
           <IconMenu className="h-5 w-5" />
         </button>
+
+        {/* Brand mark — the sidebar is hidden on mobile, so carry it here */}
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent md:hidden">
+          <IconRadar className="h-4 w-4" />
+        </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -86,13 +94,13 @@ export function TopBar() {
           align="right"
           button={
             <span className="flex h-8 w-8 items-center justify-center rounded-full border border-line bg-raised text-xs font-semibold text-tx1 transition-colors hover:border-tx3/40">
-              M
+              {operatorName.slice(0, 1).toUpperCase()}
             </span>
           }
           header={
             <div>
-              <div className="text-xs font-semibold text-tx1">Max</div>
-              <div className="text-2xs text-tx3">max@alluraimports.com · Allura Capital</div>
+              <div className="text-xs font-semibold text-tx1">{operatorName}</div>
+              <div className="text-2xs text-tx3">{operatorOrg}</div>
             </div>
           }
           items={[

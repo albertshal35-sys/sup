@@ -572,12 +572,22 @@ route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
     env.DB.prepare("SELECT value FROM app_settings WHERE key = 'outreach'").first<{ value: string }>(),
   ]);
   if (!entity) return json({ error: "not_found" }, env, 404);
+  // Sender identity from Settings → Outreach; unset fields fall back to a
+  // neutral descriptor rather than feeding the model blanks.
+  let identity = "a private real-estate lender";
+  try {
+    const cfg = JSON.parse(identityRow?.value ?? "{}") as { senderName?: string; company?: string };
+    const parts = [cfg.senderName, cfg.company].filter((s): s is string => Boolean(s && s.trim()));
+    if (parts.length) identity = parts.join(" at ");
+  } catch {
+    // keep fallback
+  }
   try {
     const message = await generateOutreach(
       env,
       channel,
       JSON.stringify({ entity, loans: loans.results, signals: triggers.results }),
-      identityRow?.value ?? "a private lender"
+      identity
     );
     return json({ message }, env);
   } catch (err) {

@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp, type View } from "../store";
 import type { TriggerItem } from "../types";
 import { classNames, money } from "../lib/format";
-import { IconAlert, IconCash, IconClock, IconGrid, IconHammer, IconKanban, IconSearch } from "./icons";
+import { IconAlert, IconCash, IconClock, IconGear, IconGrid, IconHammer, IconKanban, IconMap, IconSearch } from "./icons";
 
 interface EntityHit {
   type: "entity";
@@ -31,7 +31,9 @@ const NAV_HITS: NavHit[] = [
   { type: "nav", key: "nav-cash", view: "cash_poor", label: "Go to Cash-Poor Buyers", icon: <IconCash className="h-4 w-4" /> },
   { type: "nav", key: "nav-permit", view: "permit", label: "Go to Permits", icon: <IconHammer className="h-4 w-4" /> },
   { type: "nav", key: "nav-lien", view: "lien", label: "Go to Lien Alerts", icon: <IconAlert className="h-4 w-4" /> },
+  { type: "nav", key: "nav-map", view: "map", label: "Go to Borough Map", icon: <IconMap className="h-4 w-4" /> },
   { type: "nav", key: "nav-pipe", view: "watchlist", label: "Go to Pipeline", icon: <IconKanban className="h-4 w-4" /> },
+  { type: "nav", key: "nav-settings", view: "settings", label: "Go to Settings", icon: <IconGear className="h-4 w-4" /> },
 ];
 
 export function CommandPalette() {
@@ -106,7 +108,7 @@ export function CommandPalette() {
 
     const navHits = q
       ? NAV_HITS.filter((n) => n.label.toLowerCase().includes(q))
-      : NAV_HITS.slice(0, 3);
+      : NAV_HITS;
 
     return [...entityHits, ...navHits];
   }, [feeds, query]);
