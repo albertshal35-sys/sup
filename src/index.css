@@ -3,8 +3,41 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  /* ---- Obsidian (dark, default) ---- */
+  :root,
+  :root[data-theme="dark"] {
     color-scheme: dark;
+    --bg: 11 12 15; /* #0b0c0f */
+    --surface: 19 20 24; /* #131418 */
+    --raised: 28 30 35; /* #1c1e23 */
+    --line: 39 41 47; /* #27292f */
+    --tx1: 237 238 240; /* #edeef0 */
+    --tx2: 155 161 168; /* #9ba1a8 */
+    --tx3: 104 110 118; /* #686e76 */
+    --accent: 108 195 213; /* muted glacier cyan */
+    --violet: 148 141 234; /* dusk violet */
+    --ok: 91 196 146;
+    --warn: 217 169 84;
+    --danger: 224 121 107;
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  }
+
+  /* ---- Paper (light) ---- */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: 244 245 246; /* #f4f5f6 */
+    --surface: 255 255 255;
+    --raised: 238 240 242; /* #eef0f2 */
+    --line: 226 229 232; /* #e2e5e8 */
+    --tx1: 23 25 29; /* #17191d */
+    --tx2: 90 97 106; /* #5a616a */
+    --tx3: 143 149 157; /* #8f959d */
+    --accent: 15 114 133; /* deep teal-cyan */
+    --violet: 95 81 201;
+    --ok: 23 114 69;
+    --warn: 154 107 31;
+    --danger: 179 54 42;
+    --card-shadow: 0 1px 2px rgb(20 24 30 / 0.05), 0 2px 10px rgb(20 24 30 / 0.04);
   }
 
   html {
@@ -14,25 +47,24 @@
   }
 
   body {
-    @apply bg-ink-950 text-mist-200 font-sans text-sm;
-    font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+    @apply bg-bg font-sans text-sm text-tx1;
   }
 
   ::selection {
-    background: rgba(111, 214, 228, 0.25);
+    background: rgb(var(--accent) / 0.25);
   }
 
-  /* Slim, obsidian scrollbars */
+  /* Slim scrollbars */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+    scrollbar-color: rgb(var(--tx3) / 0.4) transparent;
   }
   *::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   *::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgb(var(--tx3) / 0.4);
     border-radius: 999px;
   }
   *::-webkit-scrollbar-track {
@@ -41,21 +73,22 @@
 }
 
 @layer components {
-  /* Liquid-glass surface: translucent layer + hairline border + inner light */
-  .glass {
-    @apply rounded-2xl border border-white/[0.07] bg-white/[0.03] shadow-glass backdrop-blur-xl;
+  /* Clean card: solid surface, hairline border, quiet shadow */
+  .card {
+    @apply rounded-2xl border border-line bg-surface;
+    box-shadow: var(--card-shadow);
   }
-  .glass-hover {
-    @apply transition-colors duration-200 hover:border-white/[0.12] hover:bg-white/[0.05];
+  .card-hover {
+    @apply transition-colors duration-200 hover:border-tx3/40;
   }
   .hairline {
-    @apply border-white/[0.07];
+    @apply border-line;
   }
   /* Financial figures: right-aligned tabular numerals */
   .num {
-    @apply tabular-nums text-right;
+    @apply text-right tabular-nums;
   }
   .kbd {
-    @apply rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-2xs text-mist-400;
+    @apply rounded border border-line bg-raised px-1.5 py-0.5 text-2xs text-tx3;
   }
 }

@@ -5,9 +5,9 @@ import { classNames } from "../lib/format";
 /** Urgency pill — critical / hot / warm */
 export function UrgencyPill({ urgency }: { urgency: Urgency }) {
   const styles: Record<Urgency, string> = {
-    critical: "bg-glow-red/10 text-glow-red border-glow-red/25",
-    hot: "bg-glow-amber/10 text-glow-amber border-glow-amber/25",
-    warm: "bg-glow-cyan/10 text-glow-cyan border-glow-cyan/25",
+    critical: "bg-danger/10 text-danger border-danger/25",
+    hot: "bg-warn/10 text-warn border-warn/25",
+    warm: "bg-accent/10 text-accent border-accent/25",
   };
   return (
     <span
@@ -17,7 +17,7 @@ export function UrgencyPill({ urgency }: { urgency: Urgency }) {
       )}
     >
       {urgency === "critical" && (
-        <span className="h-1 w-1 animate-pulse-dot rounded-full bg-glow-red" />
+        <span className="h-1 w-1 animate-pulse-dot rounded-full bg-danger" />
       )}
       {urgency}
     </span>
@@ -26,13 +26,16 @@ export function UrgencyPill({ urgency }: { urgency: Urgency }) {
 
 /** 0–100 intent score with a thin gauge bar */
 export function ScoreGauge({ score }: { score: number }) {
-  const tone = score >= 90 ? "bg-glow-red" : score >= 78 ? "bg-glow-amber" : "bg-glow-cyan";
+  const tone = score >= 90 ? "bg-danger" : score >= 78 ? "bg-warn" : "bg-accent";
   return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1 w-10 overflow-hidden rounded-full bg-white/[0.08]">
+    <div
+      className="flex items-center justify-end gap-2"
+      title={`Intent score ${score}/100 — composite of urgency, borrower velocity and deal size`}
+    >
+      <div className="h-1 w-10 overflow-hidden rounded-full bg-line">
         <div className={classNames("h-full rounded-full", tone)} style={{ width: `${score}%` }} />
       </div>
-      <span className="num w-6 text-xs font-semibold text-mist-100">{score}</span>
+      <span className="num w-6 text-xs font-semibold text-tx1">{score}</span>
     </div>
   );
 }
@@ -52,9 +55,9 @@ export function TileHeader({
   return (
     <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5 sm:px-5">
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="text-mist-400">{icon}</span>
-        <h2 className="truncate text-[13px] font-semibold tracking-tight text-mist-100">{title}</h2>
-        {hint && <span className="hidden truncate text-2xs text-mist-500 md:inline">{hint}</span>}
+        <span className="text-tx2">{icon}</span>
+        <h2 className="truncate text-[13px] font-semibold tracking-tight text-tx1">{title}</h2>
+        {hint && <span className="hidden truncate text-2xs text-tx3 md:inline">{hint}</span>}
       </div>
       {action}
     </div>
@@ -65,7 +68,7 @@ export function TileHeader({
 export function ConfidenceChip({ value }: { value: number }) {
   const pctVal = Math.round(value * 100);
   const tone =
-    pctVal >= 90 ? "text-glow-green" : pctVal >= 75 ? "text-glow-cyan" : "text-glow-amber";
+    pctVal >= 90 ? "text-ok" : pctVal >= 75 ? "text-accent" : "text-warn";
   return (
     <span className={classNames("text-2xs font-medium tabular-nums", tone)} title="Skip-trace match confidence">
       {pctVal}% match
@@ -77,12 +80,18 @@ export function ConfidenceChip({ value }: { value: number }) {
 export function Countdown({ days }: { days: number }) {
   const tone =
     days <= 60
-      ? "border-glow-red/30 bg-glow-red/10 text-glow-red"
+      ? "border-danger/30 bg-danger/10 text-danger"
       : days <= 90
-        ? "border-glow-amber/30 bg-glow-amber/10 text-glow-amber"
-        : "border-white/10 bg-white/[0.04] text-mist-300";
+        ? "border-warn/30 bg-warn/10 text-warn"
+        : "border-line bg-raised/60 text-tx2";
+  const maturesOn = new Date(Date.now() + days * 86_400_000).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
   return (
     <span
+      title={`Note matures ~${maturesOn} (${days} days)`}
       className={classNames(
         "inline-flex rounded-md border px-1.5 py-0.5 font-mono text-2xs font-semibold tabular-nums",
         tone
@@ -95,6 +104,6 @@ export function Countdown({ days }: { days: number }) {
 
 export function EmptyState({ label }: { label: string }) {
   return (
-    <div className="flex h-32 items-center justify-center text-xs text-mist-500">{label}</div>
+    <div className="flex h-32 items-center justify-center text-xs text-tx3">{label}</div>
   );
 }

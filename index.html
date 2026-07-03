@@ -1,15 +1,27 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0a0e" />
+    <meta name="theme-color" content="#0b0c0f" />
     <meta
       name="description"
       content="LienWolf — borrower-intent intelligence for private & hard money lenders."
     />
-    <link rel="preconnect" href="https://rsms.me/" />
-    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <script>
+      // Pre-paint theme stamp: read the persisted UI store to avoid a flash.
+      try {
+        var s = JSON.parse(localStorage.getItem("lienwolf-ui") || "{}");
+        var t = (s.state && s.state.theme) || "dark";
+        document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Schibsted+Grotesk:wght@400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+    />
     <title>LienWolf — Lender Intelligence</title>
   </head>
   <body>

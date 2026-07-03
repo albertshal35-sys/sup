@@ -12,9 +12,13 @@ export type View =
   | "watchlist"
   | "settings";
 
+export type Theme = "dark" | "light";
+
 interface AppState {
   view: View;
   mobileNavOpen: boolean;
+  collapsed: boolean; // sidebar icon-rail mode (persisted)
+  theme: Theme; // persisted + mirrored to <html data-theme>
   loading: boolean;
 
   kpis: Kpis | null;
@@ -29,6 +33,8 @@ interface AppState {
 
   setView: (v: View) => void;
   setMobileNav: (open: boolean) => void;
+  toggleCollapsed: () => void;
+  toggleTheme: () => void;
   loadAll: () => Promise<void>;
   openResume: (entityId: string, fromItem?: TriggerItem) => Promise<void>;
   closeResume: () => void;
@@ -49,6 +55,8 @@ export const useApp = create<AppState>()(
     (set, get) => ({
       view: "dashboard",
       mobileNavOpen: false,
+      collapsed: false,
+      theme: "dark",
       loading: true,
 
       kpis: null,
@@ -63,6 +71,12 @@ export const useApp = create<AppState>()(
 
       setView: (view) => set({ view, mobileNavOpen: false }),
       setMobileNav: (mobileNavOpen) => set({ mobileNavOpen }),
+      toggleCollapsed: () => set({ collapsed: !get().collapsed }),
+      toggleTheme: () => {
+        const theme: Theme = get().theme === "dark" ? "light" : "dark";
+        applyTheme(theme);
+        set({ theme });
+      },
 
       loadAll: async () => {
         set({ loading: true });
@@ -113,10 +127,23 @@ export const useApp = create<AppState>()(
     }),
     {
       name: "lienwolf-ui",
-      partialize: (s) => ({ watchlist: s.watchlist, dismissed: s.dismissed }),
+      partialize: (s) => ({
+        watchlist: s.watchlist,
+        dismissed: s.dismissed,
+        collapsed: s.collapsed,
+        theme: s.theme,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) applyTheme(state.theme);
+      },
     }
   )
 );
+
+/** Stamp the theme on <html>; index.html pre-paint script reads the same store key. */
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+}
 
 /** Feed rows minus anything the user dismissed. */
 export function useVisibleFeed(kind: TriggerKind): TriggerItem[] {

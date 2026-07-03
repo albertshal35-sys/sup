@@ -13,12 +13,12 @@ export function Dashboard() {
   return (
     <div className="flex flex-col gap-3">
       <KpiStrip />
-      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-6">
-        <div className="flex flex-col gap-3 xl:col-span-4">
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-6">
+        <div className="flex flex-col gap-3 lg:col-span-4">
           <MaturityFeed />
           <PermitFeed />
         </div>
-        <div className="flex flex-col gap-3 xl:col-span-2">
+        <div className="flex flex-col gap-3 lg:col-span-2">
           <LienFeed />
           <CashPoorFeed />
           <PipelineCard />

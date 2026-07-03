@@ -1,60 +1,51 @@
 import type { Config } from "tailwindcss";
 
 /**
- * LienWolf design tokens — "Obsidian" dark system.
- * Deep neutral blacks, desaturated glacier-cyan + dusk-violet accents.
+ * LienWolf design tokens — dual-theme "Obsidian / Paper" system.
+ * All colors resolve through CSS variables set per-theme in index.css,
+ * so every component works in both light and dark without variants.
  */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: ["selector", '[data-theme="dark"]'],
   theme: {
     extend: {
       colors: {
-        ink: {
-          950: "#070709",
-          900: "#0a0a0e",
-          850: "#0e0e13",
-          800: "#13131a",
-          700: "#1a1a23",
-          600: "#25252f",
-        },
-        mist: {
-          100: "#f2f2f5",
-          200: "#dcdce2",
-          300: "#c2c2cb",
-          400: "#9696a3",
-          500: "#6c6c79",
-          600: "#4a4a55",
-        },
-        glow: {
-          cyan: "#6fd6e4",
-          cyanDim: "#2e6b76",
-          violet: "#988ceb",
-          violetDim: "#4a4380",
-          green: "#5ec99a",
-          amber: "#dcae5f",
-          red: "#e07a6c",
-        },
+        bg: "rgb(var(--bg) / <alpha-value>)",
+        surface: "rgb(var(--surface) / <alpha-value>)",
+        raised: "rgb(var(--raised) / <alpha-value>)",
+        line: "rgb(var(--line) / <alpha-value>)",
+        tx1: "rgb(var(--tx1) / <alpha-value>)",
+        tx2: "rgb(var(--tx2) / <alpha-value>)",
+        tx3: "rgb(var(--tx3) / <alpha-value>)",
+        accent: "rgb(var(--accent) / <alpha-value>)",
+        violet: "rgb(var(--violet) / <alpha-value>)",
+        ok: "rgb(var(--ok) / <alpha-value>)",
+        warn: "rgb(var(--warn) / <alpha-value>)",
+        danger: "rgb(var(--danger) / <alpha-value>)",
       },
       fontFamily: {
         sans: [
-          "Inter",
+          "Instrument Sans",
           "-apple-system",
           "BlinkMacSystemFont",
           "SF Pro Text",
           "Segoe UI",
           "sans-serif",
         ],
+        display: [
+          "Schibsted Grotesk",
+          "Instrument Sans",
+          "-apple-system",
+          "sans-serif",
+        ],
+        mono: ["IBM Plex Mono", "SF Mono", "ui-monospace", "monospace"],
       },
       fontSize: {
         "2xs": ["0.6875rem", { lineHeight: "1rem" }],
       },
       boxShadow: {
-        glass: "0 8px 32px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04)",
-        pop: "0 24px 80px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4)",
-        "glow-cyan": "0 0 24px rgba(111,214,228,0.14)",
-      },
-      backdropBlur: {
-        xs: "2px",
+        pop: "0 24px 80px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.18)",
       },
       animation: {
         "fade-up": "fadeUp 0.35s cubic-bezier(0.22,1,0.36,1) both",

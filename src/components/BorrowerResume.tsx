@@ -7,19 +7,19 @@ import { UrgencyPill } from "./primitives";
 function VelocityRing({ score }: { score: number }) {
   const r = 26;
   const c = 2 * Math.PI * r;
-  const tone = score >= 85 ? "#5ec99a" : score >= 70 ? "#6fd6e4" : "#dcae5f";
+  const tone = score >= 85 ? "text-ok" : score >= 70 ? "text-accent" : "text-warn";
   return (
     <div className="relative h-16 w-16 shrink-0">
       <svg viewBox="0 0 64 64" className="h-16 w-16 -rotate-90">
-        <circle cx="32" cy="32" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+        <circle cx="32" cy="32" r={r} fill="none" className="stroke-line" strokeWidth="4" />
         <circle
-          cx="32" cy="32" r={r} fill="none" stroke={tone} strokeWidth="4" strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)}
+          cx="32" cy="32" r={r} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)} className={tone}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-base font-semibold tabular-nums text-mist-100">{score}</span>
-        <span className="text-[9px] uppercase tracking-wider text-mist-500">velocity</span>
+        <span className="font-display text-base font-bold tabular-nums text-tx1">{score}</span>
+        <span className="text-[9px] uppercase tracking-wider text-tx3">velocity</span>
       </div>
     </div>
   );
@@ -27,10 +27,10 @@ function VelocityRing({ score }: { score: number }) {
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3">
-      <div className="text-2xs font-medium uppercase tracking-wider text-mist-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-mist-100">{value}</div>
-      {sub && <div className="mt-0.5 text-2xs text-mist-500">{sub}</div>}
+    <div className="rounded-xl border border-line bg-raised/60 px-3.5 py-3">
+      <div className="text-2xs font-medium uppercase tracking-wider text-tx3">{label}</div>
+      <div className="mt-1 font-display text-lg font-bold tabular-nums tracking-tight text-tx1">{value}</div>
+      {sub && <div className="mt-0.5 text-2xs text-tx3">{sub}</div>}
     </div>
   );
 }
@@ -55,20 +55,20 @@ export function BorrowerResumeModal() {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center sm:p-6">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={close} />
+      <div className="absolute inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm" onClick={close} />
 
-      <div className="glass relative flex max-h-[92vh] w-full max-w-3xl animate-scale-in flex-col overflow-hidden rounded-t-3xl !bg-ink-900/90 shadow-pop sm:rounded-3xl">
+      <div className="card relative flex max-h-[92vh] w-full max-w-3xl animate-scale-in flex-col overflow-hidden rounded-t-3xl !bg-surface shadow-pop sm:rounded-3xl">
         {/* Header */}
-        <div className="flex items-start gap-4 border-b border-white/[0.06] px-5 py-4 sm:px-7 sm:py-5">
+        <div className="flex items-start gap-4 border-b border-line px-5 py-4 sm:px-7 sm:py-5">
           <VelocityRing score={e.velocityScore} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold tracking-tight text-mist-100">{e.name}</h2>
-              <span className="rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-2xs uppercase tracking-wide text-mist-400">
+              <h2 className="font-display text-lg font-bold tracking-tight text-tx1">{e.name}</h2>
+              <span className="rounded-md border border-line bg-raised/60 px-1.5 py-0.5 text-2xs uppercase tracking-wide text-tx2">
                 {e.kind === "llc" ? "LLC" : e.kind}
               </span>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-mist-400">
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-tx2">
               {e.principalName && <span>{e.principalName}</span>}
               {e.state && <span>· {e.state}</span>}
               {e.formationDate && <span>· est. {new Date(e.formationDate).getFullYear()}</span>}
@@ -81,7 +81,7 @@ export function BorrowerResumeModal() {
                 {primary.phone && (
                   <a
                     href={`tel:${primary.phone}`}
-                    className="flex items-center gap-1.5 rounded-lg border border-glow-green/25 bg-glow-green/10 px-2.5 py-1 text-xs font-medium text-glow-green transition-colors hover:bg-glow-green/20"
+                    className="flex items-center gap-1.5 rounded-lg border border-ok/25 bg-ok/10 px-2.5 py-1 text-xs font-medium text-ok transition-colors hover:bg-ok/20"
                   >
                     <IconPhone className="h-3 w-3" /> {primary.phone}
                   </a>
@@ -89,7 +89,7 @@ export function BorrowerResumeModal() {
                 {primary.email && (
                   <a
                     href={`mailto:${primary.email}`}
-                    className="flex items-center gap-1.5 rounded-lg border border-glow-cyan/25 bg-glow-cyan/10 px-2.5 py-1 text-xs font-medium text-glow-cyan transition-colors hover:bg-glow-cyan/20"
+                    className="flex items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
                   >
                     <IconMail className="h-3 w-3" /> {primary.email}
                   </a>
@@ -99,12 +99,12 @@ export function BorrowerResumeModal() {
                     href={`https://${primary.linkedin}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-mist-300 transition-colors hover:bg-white/[0.08]"
+                    className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/60 px-2.5 py-1 text-xs text-tx2 transition-colors hover:bg-line"
                   >
                     <IconExternal className="h-3 w-3" /> LinkedIn
                   </a>
                 )}
-                <span className="text-2xs text-mist-500">
+                <span className="text-2xs text-tx3">
                   skip-traced · {Math.round(primary.confidence * 100)}% match
                   {primary.verifiedAt && ` · verified ${ago(primary.verifiedAt)}`}
                 </span>
@@ -116,15 +116,15 @@ export function BorrowerResumeModal() {
               onClick={() => toggleWatch(e.id)}
               title={watched ? "Remove from watchlist" : "Add to watchlist"}
               className={classNames(
-                "rounded-xl p-2 transition-colors hover:bg-white/[0.07]",
-                watched ? "text-glow-violet" : "text-mist-400"
+                "rounded-xl p-2 transition-colors hover:bg-raised",
+                watched ? "text-violet" : "text-tx2"
               )}
             >
               <IconBookmark className="h-[18px] w-[18px]" />
             </button>
             <button
               onClick={close}
-              className="rounded-xl p-2 text-mist-400 transition-colors hover:bg-white/[0.07]"
+              className="rounded-xl p-2 text-tx2 transition-colors hover:bg-raised"
               aria-label="Close"
             >
               <IconX className="h-[18px] w-[18px]" />
@@ -149,16 +149,16 @@ export function BorrowerResumeModal() {
           {/* Active signals */}
           {resume.activeSignals.length > 0 && (
             <section className="mt-5">
-              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-mist-500">
+              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
                 Active Signals
               </h3>
               <div className="flex flex-col gap-1.5">
                 {resume.activeSignals.map((s, i) => (
                   <div
                     key={i}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-line bg-raised/60 px-3.5 py-2.5"
                   >
-                    <span className="min-w-0 truncate text-xs text-mist-200">{s.headline}</span>
+                    <span className="min-w-0 truncate text-xs text-tx1">{s.headline}</span>
                     <UrgencyPill urgency={s.score >= 90 ? "critical" : s.score >= 78 ? "hot" : "warm"} />
                   </div>
                 ))}
@@ -168,18 +168,18 @@ export function BorrowerResumeModal() {
 
           {/* Transaction timeline */}
           <section className="mt-5">
-            <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-mist-500">
+            <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
               Transaction History · 36 months
             </h3>
             {resume.transactions.length === 0 ? (
-              <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3 text-xs text-mist-500">
+              <p className="rounded-xl border border-line bg-raised/60 px-3.5 py-3 text-xs text-tx3">
                 Full county history loads once the record pipeline links this entity's deeds.
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
+              <div className="overflow-x-auto rounded-xl border border-line">
                 <table className="w-full min-w-[480px]">
                   <thead>
-                    <tr className="border-b border-white/[0.05] bg-white/[0.02] text-2xs uppercase tracking-wider text-mist-500">
+                    <tr className="border-b border-line bg-raised/60 text-2xs uppercase tracking-wider text-tx3">
                       <th className="px-3.5 py-2 text-left font-medium">Date</th>
                       <th className="px-3 py-2 text-left font-medium">Side</th>
                       <th className="px-3 py-2 text-left font-medium">Property</th>
@@ -188,8 +188,8 @@ export function BorrowerResumeModal() {
                   </thead>
                   <tbody>
                     {resume.transactions.map((t) => (
-                      <tr key={t.id} className="border-b border-white/[0.04] last:border-0">
-                        <td className="whitespace-nowrap px-3.5 py-2 text-xs tabular-nums text-mist-400">
+                      <tr key={t.id} className="border-b border-line last:border-0">
+                        <td className="whitespace-nowrap px-3.5 py-2 text-xs tabular-nums text-tx2">
                           {shortDate(t.recordedAt)}
                         </td>
                         <td className="px-3 py-2">
@@ -197,22 +197,22 @@ export function BorrowerResumeModal() {
                             className={classNames(
                               "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
                               t.side === "purchase"
-                                ? "bg-glow-violet/10 text-glow-violet"
-                                : "bg-glow-green/10 text-glow-green"
+                                ? "bg-violet/10 text-violet"
+                                : "bg-ok/10 text-ok"
                             )}
                           >
                             {t.side === "purchase" ? "Buy" : "Sell"}
                           </span>
                           {t.isCash && (
-                            <span className="ml-1.5 text-2xs text-glow-amber" title="All-cash">
+                            <span className="ml-1.5 text-2xs text-warn" title="All-cash">
                               cash
                             </span>
                           )}
                         </td>
-                        <td className="max-w-[220px] truncate px-3 py-2 text-xs text-mist-300">
+                        <td className="max-w-[220px] truncate px-3 py-2 text-xs text-tx2">
                           {t.address}, {t.city}
                         </td>
-                        <td className="num px-3.5 py-2 text-xs font-medium text-mist-100">
+                        <td className="num px-3.5 py-2 text-xs font-medium text-tx1">
                           {moneyFull(t.price)}
                         </td>
                       </tr>
@@ -226,36 +226,36 @@ export function BorrowerResumeModal() {
           {/* Loan history */}
           {resume.loans.length > 0 && (
             <section className="mt-5">
-              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-mist-500">
+              <h3 className="mb-2 text-2xs font-medium uppercase tracking-widest text-tx3">
                 Debt Stack
               </h3>
               <div className="flex flex-col gap-1.5">
                 {resume.loans.map((l) => (
                   <div
                     key={l.id}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5"
+                    className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-line bg-raised/60 px-3.5 py-2.5"
                   >
-                    <IconBuilding className="h-3.5 w-3.5 shrink-0 text-mist-500" />
+                    <IconBuilding className="h-3.5 w-3.5 shrink-0 text-tx3" />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-mist-200">
+                      <div className="truncate text-xs font-medium text-tx1">
                         {l.lenderName}
-                        <span className="ml-2 text-2xs font-normal text-mist-500">{l.address}</span>
+                        <span className="ml-2 text-2xs font-normal text-tx3">{l.address}</span>
                       </div>
-                      <div className="text-2xs tabular-nums text-mist-500">
+                      <div className="text-2xs tabular-nums text-tx3">
                         {shortDate(l.originatedAt)}
                         {l.maturityDate && ` → ${shortDate(l.maturityDate)}`}
                         {l.ratePct != null && ` · ${l.ratePct}%`}
                       </div>
                     </div>
-                    <span className="text-sm font-semibold tabular-nums text-mist-100">
+                    <span className="text-sm font-semibold tabular-nums text-tx1">
                       {money(l.principal)}
                     </span>
                     <span
                       className={classNames(
                         "rounded-md px-1.5 py-0.5 text-2xs font-medium uppercase",
                         l.status === "active"
-                          ? "bg-glow-amber/10 text-glow-amber"
-                          : "bg-white/[0.05] text-mist-400"
+                          ? "bg-warn/10 text-warn"
+                          : "bg-raised text-tx2"
                       )}
                     >
                       {l.status.replace("_", " ")}
