@@ -4,7 +4,8 @@ import { json, type Env } from "./index";
 import { runIngestionPipeline, runSingleConnector, CONNECTOR_IDS } from "./ingest";
 import { encryptSecret } from "./crypto";
 import { authConfigured, loginWithCode, verifySession } from "./auth";
-import { aiAvailable, generateBrief } from "./ai";
+import { aiAvailable, generateBrief, generateOutreach } from "./ai";
+import { sendTestDigest } from "./alerts";
 
 type Handler = (
   req: Request,
@@ -73,24 +74,30 @@ async function getDataMode(env: Env): Promise<"demo" | "live"> {
 /* ---------------------------- public settings ---------------------------- */
 
 route("GET", "/api/settings", async (_req, env) => {
-  const [mode, marketsRow, gatewayRow] = await Promise.all([
-    getDataMode(env),
-    env.DB.prepare("SELECT value FROM app_settings WHERE key = 'markets'").first<{ value: string }>(),
-    env.DB.prepare("SELECT value FROM app_settings WHERE key = 'ai_gateway_id'").first<{ value: string }>(),
-  ]);
-  let markets: string[] = [];
-  try {
-    markets = marketsRow ? (JSON.parse(marketsRow.value) as string[]) : [];
-  } catch {
-    /* keep [] */
-  }
+  const rows = await env.DB.prepare(
+    `SELECT key, value FROM app_settings WHERE key IN
+     ('data_mode','markets','ai_gateway_id','alerts_enabled','alert_email','underwriting','outreach')`
+  ).all<{ key: string; value: string }>();
+  const map = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
+  const parse = (v: string | undefined) => {
+    try {
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
+  };
   return json(
     {
-      dataMode: mode,
-      markets,
+      dataMode: map.data_mode === "live" ? "live" : "demo",
+      markets: parse(map.markets) ?? [],
       aiEnabled: aiAvailable(env),
-      aiGatewayId: gatewayRow?.value || "",
+      aiGatewayId: map.ai_gateway_id || "",
       scrapingConfigured: Boolean(env.CF_ACCOUNT_ID && env.CF_API_TOKEN),
+      alertsEnabled: map.alerts_enabled === "true",
+      alertEmail: map.alert_email || "",
+      alertsConfigured: Boolean(env.RESEND_API_KEY),
+      underwriting: parse(map.underwriting),
+      outreach: parse(map.outreach),
     },
     env
   );
@@ -148,7 +155,7 @@ const FEED_SQL = `
   SELECT t.id, t.kind, t.score, t.urgency, t.headline, t.payload_json, t.detected_at, t.status,
          e.id AS entity_id, e.name AS entity_name, e.kind AS entity_kind, e.principal_name,
          e.flips_36mo, e.avg_margin_pct, e.velocity_score,
-         p.address, p.city, p.county, p.state, p.est_value,
+         p.address, p.city, p.county, p.state, p.est_value, p.lat, p.lng,
          c.phone, c.email, c.confidence AS contact_confidence
   FROM triggers t
   JOIN entities e ON e.id = t.entity_id
@@ -445,6 +452,10 @@ route("PUT", "/api/admin/settings", async (req, env) => {
     dataMode?: string;
     markets?: string[];
     aiGatewayId?: string;
+    alertsEnabled?: boolean;
+    alertEmail?: string;
+    underwriting?: Record<string, unknown>;
+    outreach?: Record<string, unknown>;
   };
   if (body.dataMode === "demo" || body.dataMode === "live") {
     await env.DB.prepare(
@@ -452,6 +463,21 @@ route("PUT", "/api/admin/settings", async (req, env) => {
     )
       .bind(body.dataMode)
       .run();
+  }
+  const upsertSetting = async (key: string, value: string) => {
+    await env.DB.prepare(
+      "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
+    )
+      .bind(key, value)
+      .run();
+  };
+  if (typeof body.alertsEnabled === "boolean") await upsertSetting("alerts_enabled", String(body.alertsEnabled));
+  if (typeof body.alertEmail === "string") await upsertSetting("alert_email", body.alertEmail.trim().slice(0, 200));
+  if (body.underwriting && typeof body.underwriting === "object") {
+    await upsertSetting("underwriting", JSON.stringify(body.underwriting).slice(0, 2000));
+  }
+  if (body.outreach && typeof body.outreach === "object") {
+    await upsertSetting("outreach", JSON.stringify(body.outreach).slice(0, 2000));
   }
   if (typeof body.aiGatewayId === "string") {
     await env.DB.prepare(
@@ -520,6 +546,40 @@ route("POST", "/api/ai/brief/:entityId", async (_req, env, params) => {
       JSON.stringify({ entity, loans: loans.results, signals: triggers.results, transactions: txs.results })
     );
     return json({ brief }, env);
+  } catch (err) {
+    return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
+  }
+});
+
+route("POST", "/api/admin/alerts/test", async (_req, env) => {
+  if (!env.RESEND_API_KEY) return json({ error: "resend_not_configured" }, env, 503);
+  const res = await sendTestDigest(env);
+  return json(res, env, res.ok ? 200 : 502);
+});
+
+route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
+  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
+  const body = (await req.json().catch(() => ({}))) as { channel?: string };
+  const channel = body.channel === "sms" ? "sms" : "email";
+  const [entity, loans, triggers, identityRow] = await Promise.all([
+    env.DB.prepare("SELECT * FROM entities WHERE id = ?1").bind(params.entityId).first(),
+    env.DB.prepare(
+      "SELECT lender_name, principal, rate_pct, originated_at, maturity_date, status FROM loans WHERE entity_id = ?1 ORDER BY originated_at DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare(
+      "SELECT kind, headline, score FROM triggers WHERE entity_id = ?1 AND status NOT IN ('dismissed','converted') ORDER BY score DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare("SELECT value FROM app_settings WHERE key = 'outreach'").first<{ value: string }>(),
+  ]);
+  if (!entity) return json({ error: "not_found" }, env, 404);
+  try {
+    const message = await generateOutreach(
+      env,
+      channel,
+      JSON.stringify({ entity, loans: loans.results, signals: triggers.results }),
+      identityRow?.value ?? "a private lender"
+    );
+    return json({ message }, env);
   } catch (err) {
     return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
   }

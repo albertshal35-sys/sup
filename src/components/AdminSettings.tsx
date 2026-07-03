@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApp } from "../store";
 import { admin, probeSettings } from "../lib/api";
-import type { ConnectorInfo } from "../types";
+import type { ConnectorInfo, OutreachDefaults, UnderwritingDefaults } from "../types";
+import { UNDERWRITING_FALLBACK } from "./QuoteModal";
 import { ago, classNames } from "../lib/format";
 import { Toggle, TextField, TextArea, Select, Modal } from "./ui";
 import { IconAlert, IconHelp, IconPulse, IconX } from "./icons";
@@ -334,6 +335,17 @@ export function SettingsView() {
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(serverSettings?.alertsEnabled ?? false);
+  const [alertEmail, setAlertEmail] = useState(serverSettings?.alertEmail ?? "");
+  const [uw, setUw] = useState<UnderwritingDefaults>(serverSettings?.underwriting ?? UNDERWRITING_FALLBACK);
+  const [outreachCfg, setOutreachCfg] = useState<OutreachDefaults>(
+    serverSettings?.outreach ?? {
+      senderName: "Max",
+      company: "Allura Capital",
+      signature: "Max\nAllura Capital",
+      defaultChannel: "email",
+    }
+  );
 
   const refresh = useCallback(async () => {
     const probe = await probeSettings();
@@ -341,6 +353,10 @@ export function SettingsView() {
     if (probe.status !== "ok") return;
     setMarkets(probe.settings.markets);
     setGatewayId(probe.settings.aiGatewayId);
+    setAlertsEnabled(probe.settings.alertsEnabled);
+    setAlertEmail(probe.settings.alertEmail);
+    if (probe.settings.underwriting) setUw(probe.settings.underwriting);
+    if (probe.settings.outreach) setOutreachCfg(probe.settings.outreach);
     const res = await admin.getConnectors();
     setConnectors(res.ok ? res.data.connectors : null);
   }, []);
@@ -492,6 +508,152 @@ export function SettingsView() {
             {offline ? "Connector management requires the deployed Worker." : "Loading connectors…"}
           </p>
         )}
+      </Section>
+
+      {/* Alerts & digest */}
+      <Section
+        title="Alerts & daily digest"
+        onHelp={() => setGuideOpen(true)}
+        sub="After every pipeline run, email the critical picture: new high-urgency signals and notes crossing D-60. Quiet days send nothing. Requires a RESEND_API_KEY secret on the Worker."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex items-center gap-2.5 rounded-xl border border-line bg-raised/40 px-4 py-2.5">
+            <span className="text-xs font-medium text-tx1">Digest</span>
+            <Toggle
+              checked={alertsEnabled}
+              disabled={offline}
+              label="Alerts enabled"
+              onChange={async (v) => {
+                setAlertsEnabled(v);
+                const res = await admin.saveSettings({ alertsEnabled: v });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+            />
+          </div>
+          <div className="min-w-[220px] flex-1">
+            <span className="text-2xs font-medium text-tx3">Send to</span>
+            <TextField
+              value={alertEmail}
+              onChange={setAlertEmail}
+              onBlur={async () => {
+                const res = await admin.saveSettings({ alertEmail });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+              placeholder="you@yourfund.com"
+              disabled={offline}
+              className="mt-1"
+            />
+          </div>
+          <button
+            disabled={offline || !alertEmail}
+            onClick={async () => {
+              const res = await admin.testAlerts();
+              flash(res.ok ? "Test digest sent — check your inbox." : `Send failed: ${res.error}`);
+            }}
+            className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
+          >
+            Send test
+          </button>
+        </div>
+        {serverSettings && !serverSettings.alertsConfigured && !offline && (
+          <p className="mt-2 text-2xs text-warn">
+            Set the email provider first: <code className="font-mono">npx wrangler secret put RESEND_API_KEY</code>
+          </p>
+        )}
+      </Section>
+
+      {/* Underwriting */}
+      <Section
+        title="Underwriting"
+        onHelp={() => setGuideOpen(true)}
+        sub="Defaults for the Quote & term-sheet engine on every borrower resume. The quoted rate starts at the borrower's last rate minus your spread."
+      >
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          {(
+            [
+              ["Rate spread", "pts under their last rate", "rateSpread"],
+              ["Points", "% origination", "points"],
+              ["Term", "months", "termMonths"],
+              ["Max LTV", "% ceiling", "maxLtv"],
+              ["Min loan", "$", "minLoan"],
+              ["Quote valid", "days", "validDays"],
+            ] as Array<[string, string, keyof UnderwritingDefaults]>
+          ).map(([label, hint, key]) => (
+            <div key={key}>
+              <span className="text-2xs font-medium text-tx3">
+                {label} <span className="text-tx3">({hint})</span>
+              </span>
+              <TextField
+                value={String(uw[key])}
+                onChange={(v) => setUw({ ...uw, [key]: Number(v.replace(/[^0-9.]/g, "")) || 0 })}
+                onBlur={async () => {
+                  const res = await admin.saveSettings({ underwriting: uw as unknown as Record<string, unknown> });
+                  if (!res.ok) flash(`Could not save: ${res.error}`);
+                }}
+                className="mt-1 tabular-nums"
+              />
+            </div>
+          ))}
+          <div className="col-span-2">
+            <span className="text-2xs font-medium text-tx3">Lender name on term sheets</span>
+            <TextField
+              value={uw.lenderName}
+              onChange={(v) => setUw({ ...uw, lenderName: v })}
+              onBlur={async () => {
+                const res = await admin.saveSettings({ underwriting: uw as unknown as Record<string, unknown> });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+              className="mt-1"
+            />
+          </div>
+        </div>
+      </Section>
+
+      {/* Outreach identity */}
+      <Section
+        title="Outreach identity"
+        onHelp={() => setGuideOpen(true)}
+        sub="Used by the AI outreach composer — who the drafts are from and the signature appended to emails."
+      >
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+          <div>
+            <span className="text-2xs font-medium text-tx3">Sender name</span>
+            <TextField
+              value={outreachCfg.senderName}
+              onChange={(v) => setOutreachCfg({ ...outreachCfg, senderName: v })}
+              onBlur={async () => {
+                const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <span className="text-2xs font-medium text-tx3">Company</span>
+            <TextField
+              value={outreachCfg.company}
+              onChange={(v) => setOutreachCfg({ ...outreachCfg, company: v })}
+              onBlur={async () => {
+                const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <span className="text-2xs font-medium text-tx3">Email signature</span>
+            <TextArea
+              value={outreachCfg.signature}
+              onChange={(v) => setOutreachCfg({ ...outreachCfg, signature: v })}
+              onBlur={async () => {
+                const res = await admin.saveSettings({ outreach: outreachCfg as unknown as Record<string, unknown> });
+                if (!res.ok) flash(`Could not save: ${res.error}`);
+              }}
+              rows={2}
+              className="mt-1"
+            />
+          </div>
+        </div>
       </Section>
 
       {/* AI pipeline */}

@@ -118,6 +118,35 @@ export async function generateBrief(env: Env, context: string): Promise<string> 
   );
 }
 
+/** Personalized outreach draft (email or SMS) grounded in borrower records. */
+export async function generateOutreach(
+  env: Env,
+  channel: "email" | "sms",
+  context: string,
+  identity: string
+): Promise<string> {
+  const constraints =
+    channel === "sms"
+      ? "Write ONE text message under 300 characters. Casual-professional, no links, no placeholders."
+      : "Write a short email: subject line on the first line prefixed 'Subject: ', then a blank line, then 90-130 words. No placeholders like [Name] — use the actual data.";
+  return runModel(
+    env,
+    [
+      {
+        role: "system",
+        content:
+          "You write first-touch outreach for a private/hard-money real-estate lender contacting a borrower. " +
+          "Reference their actual situation (their project, their maturing note, their rates) without sounding like surveillance — " +
+          "frame it as being active in the same market. One concrete value hook (rate, speed, or certainty of close). One clear ask. " +
+          constraints +
+          ` Sender identity: ${identity}. Ground every claim in the provided data; never invent facts.`,
+      },
+      { role: "user", content: context.slice(0, 24_000) },
+    ],
+    1024
+  );
+}
+
 /* ---------------------- Browser Rendering (scraping) ---------------------- */
 
 /**

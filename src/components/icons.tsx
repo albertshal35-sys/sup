@@ -20,6 +20,7 @@ import {
   HelpCircle,
   LayoutGrid,
   Mail,
+  Map,
   Menu,
   Moon,
   PanelLeftClose,
@@ -66,5 +67,6 @@ export const IconKanban = tune(SquareKanban);
 export const IconCalendar = tune(CalendarDays);
 export const IconPlus = tune(Plus);
 export const IconHelp = tune(HelpCircle);
+export const IconMap = tune(Map);
 export const IconCollapse = tune(PanelLeftClose);
 export const IconExpand = tune(PanelLeftOpen);

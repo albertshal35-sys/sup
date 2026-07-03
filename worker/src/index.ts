@@ -31,6 +31,8 @@ export interface Env {
   ACCESS_CODE?: string;
   CF_ACCOUNT_ID?: string;
   CF_API_TOKEN?: string;
+  RESEND_API_KEY?: string;
+  ALERT_FROM?: string;
   AI_MODEL?: string;
   AI?: { run(model: string, inputs: unknown, options?: unknown): Promise<unknown> };
 }

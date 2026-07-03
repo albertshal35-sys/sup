@@ -68,7 +68,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "Note matures in ~52 days — originated 10 mo ago with Hudson Peak",
     payload: { principal: 331000, lender: "Hudson Peak Funding", rate: 10.9, daysToMaturity: 52 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.canyon,
-    property: { address: "224 Malcolm X Blvd", city: "Brooklyn", county: "Kings", state: "NY", estValue: 486000 },
+    property: { address: "224 Malcolm X Blvd", city: "Brooklyn", county: "Kings", state: "NY", estValue: 486000, lat: 40.687, lng: -73.935 },
     contact: { phone: "(718) 555-0121", email: "sofia@canarsiegate.co", confidence: 0.79 },
   },
   {
@@ -76,7 +76,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "$1.09M hard money note ~57 days from maturity; active mechanics lien on same asset",
     payload: { principal: 1090000, lender: "Anchor Bridge Capital", rate: 10.5, daysToMaturity: 57 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.mesa,
-    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000 },
+    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000, lat: 40.6817, lng: -73.913 },
     contact: { phone: "(347) 555-0176", email: "elena@morrisparkcap.com", confidence: 0.85 },
   },
   {
@@ -84,7 +84,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "12-mo private note at 10.75% enters month 10 next week",
     payload: { principal: 742000, lender: "Hudson Peak Funding", rate: 10.75, daysToMaturity: 71 },
     detectedAt: daysFromNow(-2), status: "new", entity: entities.copper,
-    property: { address: "789 Hancock St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1130000 },
+    property: { address: "789 Hancock St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1130000, lat: 40.6852, lng: -73.9223 },
     contact: { phone: "(646) 555-0165", email: "nina@crownheights.build", confidence: 0.93 },
   },
   {
@@ -92,7 +92,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "Serial flipper (14 exits/36mo) holding an 11.25% bridge in month 9",
     payload: { principal: 618000, lender: "Anchor Bridge Capital", rate: 11.25, daysToMaturity: 84 },
     detectedAt: daysFromNow(-1), status: "viewed", entity: entities.sunbelt,
-    property: { address: "448 Lefferts Ave", city: "Brooklyn", county: "Kings", state: "NY", estValue: 912000 },
+    property: { address: "448 Lefferts Ave", city: "Brooklyn", county: "Kings", state: "NY", estValue: 912000, lat: 40.6605, lng: -73.953 },
     contact: { phone: "(718) 555-0134", email: "marcus@bushwickequity.com", confidence: 0.94 },
   },
   {
@@ -100,7 +100,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "Bridge note month 9 of 12; permit activity suggests project mid-flight",
     payload: { principal: 298000, lender: "Empire State Note Co", rate: 11.5, daysToMaturity: 88 },
     detectedAt: daysFromNow(-3), status: "new", entity: entities.lonestar,
-    property: { address: "91-12 95th St", city: "Queens", county: "Queens", state: "NY", estValue: 442000 },
+    property: { address: "91-12 95th St", city: "Queens", county: "Queens", state: "NY", estValue: 442000, lat: 40.6867, lng: -73.85 },
     contact: { phone: "(929) 555-0110", email: "jw@empireinfill.com", confidence: 0.82 },
   },
   {
@@ -108,7 +108,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "High-margin flipper in month 8; refi window opening",
     payload: { principal: 505000, lender: "Empire State Note Co", rate: 11.9, daysToMaturity: 109 },
     detectedAt: daysFromNow(-2), status: "new", entity: entities.okafor,
-    property: { address: "19-17 Ditmars Blvd", city: "Queens", county: "Queens", state: "NY", estValue: 748000 },
+    property: { address: "19-17 Ditmars Blvd", city: "Queens", county: "Queens", state: "NY", estValue: 748000, lat: 40.7757, lng: -73.9095 },
     contact: { phone: "(917) 555-0197", email: "d.okafor@gmail.com", confidence: 0.88 },
   },
   {
@@ -116,7 +116,7 @@ export const mockMaturities: TriggerItem[] = [
     headline: "12.1% private note in month 8 — rate-relief refi candidate",
     payload: { principal: 352000, lender: "Gotham Private Lending", rate: 12.1, daysToMaturity: 93 },
     detectedAt: daysFromNow(-4), status: "new", entity: entities.liu,
-    property: { address: "1174 Boston Rd", city: "Bronx", county: "Bronx", state: "NY", estValue: 517000 },
+    property: { address: "1174 Boston Rd", city: "Bronx", county: "Bronx", state: "NY", estValue: 517000, lat: 40.8299, lng: -73.8944 },
     contact: { phone: "(347) 555-0143", email: "grace.liu.re@gmail.com", confidence: 0.9 },
   },
 ];
@@ -127,7 +127,7 @@ export const mockCashPoor: TriggerItem[] = [
     headline: "$2.68M deployed cash across 3 buys in 41 days — delayed-financing window open on all three",
     payload: { cashDeployed: 2677000, buys: 3, windowDays: 41 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.ironwood,
-    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000 },
+    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000, lat: 40.7648, lng: -73.926 },
     contact: { phone: "(347) 555-0182", email: "praman@astoriadev.com", confidence: 0.91 },
   },
   {
@@ -135,7 +135,7 @@ export const mockCashPoor: TriggerItem[] = [
     headline: "$1.67M cash across 2 buys in 24 days while carrying 2 ground-up permits",
     payload: { cashDeployed: 1673000, buys: 2, windowDays: 24 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.heron,
-    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000 },
+    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000, lat: 40.888, lng: -73.86 },
     contact: { phone: "(718) 555-0158", email: "tom@blueheronbuild.com", confidence: 0.96 },
   },
   {
@@ -143,7 +143,7 @@ export const mockCashPoor: TriggerItem[] = [
     headline: "$1.01M cash across 2 buys in 52 days incl. tax-sale acquisition",
     payload: { cashDeployed: 1009000, buys: 2, windowDays: 52 },
     detectedAt: daysFromNow(-2), status: "new", entity: entities.okafor,
-    property: { address: "160-05 89th Ave", city: "Queens", county: "Queens", state: "NY", estValue: 538000 },
+    property: { address: "160-05 89th Ave", city: "Queens", county: "Queens", state: "NY", estValue: 538000, lat: 40.706, lng: -73.799 },
     contact: { phone: "(917) 555-0197", email: "d.okafor@gmail.com", confidence: 0.88 },
   },
 ];
@@ -154,7 +154,7 @@ export const mockPermits: TriggerItem[] = [
     headline: "$2.35M ground-up 8-unit filed 11 days ago; LLC matched, principal skip-traced",
     payload: { valuation: 2350000, permitType: "ground_up", permitNo: "2026-BP-18834", filedDaysAgo: 11 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.ironwood,
-    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000 },
+    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000, lat: 40.7648, lng: -73.926 },
     contact: { phone: "(347) 555-0182", email: "praman@astoriadev.com", confidence: 0.91 },
   },
   {
@@ -162,7 +162,7 @@ export const mockPermits: TriggerItem[] = [
     headline: "$1.64M 6-unit townhome cluster in review; owner-builder",
     payload: { valuation: 1640000, permitType: "ground_up", permitNo: "MIA-26-22093", filedDaysAgo: 19 },
     detectedAt: daysFromNow(-2), status: "new", entity: entities.heron,
-    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000 },
+    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000, lat: 40.888, lng: -73.86 },
     contact: { phone: "(718) 555-0158", email: "tom@blueheronbuild.com", confidence: 0.96 },
   },
   {
@@ -170,7 +170,7 @@ export const mockPermits: TriggerItem[] = [
     headline: "$1.18M new SFR + ADU filed 6 days ago",
     payload: { valuation: 1180000, permitType: "ground_up", permitNo: "BLD-26-04412", filedDaysAgo: 6 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.heron,
-    property: { address: "331 Bement Ave", city: "Staten Island", county: "Richmond", state: "NY", estValue: 2210000 },
+    property: { address: "331 Bement Ave", city: "Staten Island", county: "Richmond", state: "NY", estValue: 2210000, lat: 40.6321, lng: -74.108 },
     contact: { phone: "(718) 555-0158", email: "tom@blueheronbuild.com", confidence: 0.96 },
   },
   {
@@ -178,7 +178,7 @@ export const mockPermits: TriggerItem[] = [
     headline: "$487K structural gut issued; same asset carries maturing note",
     payload: { valuation: 487000, permitType: "structural", permitNo: "2026-BP-17501", filedDaysAgo: 15 },
     detectedAt: daysFromNow(-3), status: "viewed", entity: entities.mesa,
-    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000 },
+    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000, lat: 40.6817, lng: -73.913 },
     contact: { phone: "(347) 555-0176", email: "elena@morrisparkcap.com", confidence: 0.85 },
   },
 ];
@@ -189,7 +189,7 @@ export const mockLiens: TriggerItem[] = [
     headline: "$211.7K steel lien filed 2 days ago on active 6-unit build — draw likely frozen",
     payload: { amount: 211700, claimant: "Biscayne Steel Erectors", filedDaysAgo: 2 },
     detectedAt: daysFromNow(0), status: "new", entity: entities.heron,
-    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000 },
+    property: { address: "842 E 224th St", city: "Bronx", county: "Bronx", state: "NY", estValue: 1980000, lat: 40.888, lng: -73.86 },
     contact: { phone: "(718) 555-0158", email: "tom@blueheronbuild.com", confidence: 0.96 },
   },
   {
@@ -197,7 +197,7 @@ export const mockLiens: TriggerItem[] = [
     headline: "$148.5K GC lien on Brooklyn gut reno; note matures in ~57 days",
     payload: { amount: 148500, claimant: "Sunline Construction Inc", filedDaysAgo: 3 },
     detectedAt: daysFromNow(-1), status: "new", entity: entities.mesa,
-    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000 },
+    property: { address: "603 Bainbridge St", city: "Brooklyn", county: "Kings", state: "NY", estValue: 1620000, lat: 40.6817, lng: -73.913 },
     contact: { phone: "(347) 555-0176", email: "elena@morrisparkcap.com", confidence: 0.85 },
   },
   {
@@ -205,7 +205,7 @@ export const mockLiens: TriggerItem[] = [
     headline: "$86.2K concrete lien on new 8-unit; entity also cash-poor",
     payload: { amount: 86200, claimant: "Capital City Concrete LLC", filedDaysAgo: 7 },
     detectedAt: daysFromNow(-2), status: "new", entity: entities.ironwood,
-    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000 },
+    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000, lat: 40.7648, lng: -73.926 },
     contact: { phone: "(347) 555-0182", email: "praman@astoriadev.com", confidence: 0.91 },
   },
   {
@@ -213,7 +213,7 @@ export const mockLiens: TriggerItem[] = [
     headline: "$23.4K plumbing lien (disputed) on bridge-financed flip",
     payload: { amount: 23400, claimant: "Delgado Bros Plumbing", filedDaysAgo: 12 },
     detectedAt: daysFromNow(-5), status: "viewed", entity: entities.sunbelt,
-    property: { address: "448 Lefferts Ave", city: "Brooklyn", county: "Kings", state: "NY", estValue: 912000 },
+    property: { address: "448 Lefferts Ave", city: "Brooklyn", county: "Kings", state: "NY", estValue: 912000, lat: 40.6605, lng: -73.953 },
     contact: { phone: "(718) 555-0134", email: "marcus@bushwickequity.com", confidence: 0.94 },
   },
 ];

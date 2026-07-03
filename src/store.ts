@@ -30,6 +30,7 @@ export type View =
   | "cash_poor"
   | "permit"
   | "lien"
+  | "map"
   | "watchlist"
   | "settings";
 

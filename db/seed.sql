@@ -162,3 +162,19 @@ UPDATE principals SET origin='demo';
 
 -- App defaults (idempotent — also created by migration 0001)
 INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'demo');
+
+-- Approximate coordinates for map view
+UPDATE properties SET lat=40.6605, lng=-73.953 WHERE address='448 Lefferts Ave';
+UPDATE properties SET lat=40.7757, lng=-73.9095 WHERE address='19-17 Ditmars Blvd';
+UPDATE properties SET lat=40.6852, lng=-73.9223 WHERE address='789 Hancock St';
+UPDATE properties SET lat=40.7648, lng=-73.926 WHERE address='22-05 31st Ave';
+UPDATE properties SET lat=40.8299, lng=-73.8944 WHERE address='1174 Boston Rd';
+UPDATE properties SET lat=40.6817, lng=-73.913 WHERE address='603 Bainbridge St';
+UPDATE properties SET lat=40.6867, lng=-73.85 WHERE address='91-12 95th St';
+UPDATE properties SET lat=40.6321, lng=-74.108 WHERE address='331 Bement Ave';
+UPDATE properties SET lat=40.687, lng=-73.935 WHERE address='224 Malcolm X Blvd';
+UPDATE properties SET lat=40.6997, lng=-73.899 WHERE address='55-01 Myrtle Ave';
+UPDATE properties SET lat=40.888, lng=-73.86 WHERE address='842 E 224th St';
+UPDATE properties SET lat=40.689, lng=-73.937 WHERE address='410 Quincy St';
+UPDATE properties SET lat=40.706, lng=-73.799 WHERE address='160-05 89th Ave';
+UPDATE properties SET lat=40.636, lng=-74.115 WHERE address='52 Harrison Ave';

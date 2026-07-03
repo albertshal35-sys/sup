@@ -34,6 +34,7 @@ import type { Env } from "./index";
 import { decryptSecret } from "./crypto";
 import { rescoreTriggers } from "./scoring";
 import { extractRecords, renderPageMarkdown } from "./ai";
+import { maybeSendDigest } from "./alerts";
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 2000, 8000];
@@ -460,6 +461,8 @@ export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promis
     skipped: 0,
     checksum: null,
   }));
+
+  await maybeSendDigest(env);
 
   console.log("ingestion pipeline complete");
 }

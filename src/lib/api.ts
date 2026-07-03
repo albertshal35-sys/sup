@@ -90,6 +90,25 @@ export async function loginWithCode(
   }
 }
 
+/** Personalized outreach draft from the borrower's records. */
+export async function fetchOutreach(
+  entityId: string,
+  channel: "email" | "sms"
+): Promise<{ message: string } | { error: string }> {
+  try {
+    const res = await fetch(`/api/ai/outreach/${entityId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ channel }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    if (!res.ok || !body.message) return { error: body.error ?? "ai_unavailable" };
+    return { message: body.message };
+  } catch {
+    return { error: "offline" };
+  }
+}
+
 /** AI outreach brief, generated server-side from the borrower's records. */
 export async function fetchAiBrief(entityId: string): Promise<{ brief: string } | { error: string }> {
   try {
@@ -109,7 +128,8 @@ interface RawFeedRow {
   entity_id: string; entity_name: string; entity_kind: TriggerItem["entity"]["kind"];
   principal_name: string | null; flips_36mo: number; avg_margin_pct: number | null;
   velocity_score: number; address: string | null; city: string | null; county: string | null;
-  state: string | null; est_value: number | null; phone: string | null; email: string | null;
+  state: string | null; est_value: number | null; lat: number | null; lng: number | null;
+  phone: string | null; email: string | null;
   contact_confidence: number | null;
 }
 
@@ -124,7 +144,7 @@ function normalizeRow(r: RawFeedRow): TriggerItem {
       avgMarginPct: r.avg_margin_pct, velocityScore: r.velocity_score,
     },
     property: r.address
-      ? { address: r.address, city: r.city!, county: r.county!, state: r.state!, estValue: r.est_value }
+      ? { address: r.address, city: r.city!, county: r.county!, state: r.state!, estValue: r.est_value, lat: r.lat, lng: r.lng }
       : null,
     contact: r.phone || r.email
       ? { phone: r.phone, email: r.email, confidence: r.contact_confidence ?? 0.5 }
@@ -298,10 +318,19 @@ export const admin = {
   runConnector: (id: string) =>
     adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, { method: "POST" }),
   runAll: () => adminFetch<{ ok: boolean }>("/run-ingestion", { method: "POST" }),
-  saveSettings: (patch: { dataMode?: "demo" | "live"; markets?: string[]; aiGatewayId?: string }) =>
+  saveSettings: (patch: {
+    dataMode?: "demo" | "live";
+    markets?: string[];
+    aiGatewayId?: string;
+    alertsEnabled?: boolean;
+    alertEmail?: string;
+    underwriting?: Record<string, unknown>;
+    outreach?: Record<string, unknown>;
+  }) =>
     adminFetch<{ ok: boolean }>("/settings", {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
   purgeDemo: () => adminFetch<{ ok: boolean; deleted: number }>("/purge-demo", { method: "POST" }),
+  testAlerts: () => adminFetch<{ ok: boolean; error?: string }>("/alerts/test", { method: "POST" }),
 };

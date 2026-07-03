@@ -9,6 +9,7 @@ const TITLES: Record<View, { title: string; sub: string }> = {
   cash_poor: { title: "Cash-Poor Buyers", sub: "Multiple all-cash buys < 60 days — delayed financing" },
   permit: { title: "Permit Intelligence", sub: "Ground-up & structural filings, matched to principals" },
   lien: { title: "Lien Monitoring", sub: "Fresh mechanics liens — frozen draws, rescue capital" },
+  map: { title: "Borough Map", sub: "Every live signal across the five boroughs" },
   watchlist: { title: "Pipeline", sub: "Saved leads — watching through funded" },
   settings: { title: "Settings", sub: "Data sources, integrations & administration" },
 };

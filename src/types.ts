@@ -18,6 +18,8 @@ export interface PropertySummary {
   county: string;
   state: string;
   estValue: number | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 export interface ContactSummary {
@@ -142,12 +144,34 @@ export interface BorrowerNetwork {
   entities: NetworkEntity[];
 }
 
+export interface UnderwritingDefaults {
+  rateSpread: number; // quote = borrower's last rate − spread
+  points: number;
+  termMonths: number;
+  maxLtv: number;
+  minLoan: number;
+  lenderName: string;
+  validDays: number;
+}
+
+export interface OutreachDefaults {
+  senderName: string;
+  company: string;
+  signature: string;
+  defaultChannel: "email" | "sms";
+}
+
 export interface PublicSettings {
   dataMode: "demo" | "live";
   markets: string[];
   aiEnabled: boolean;
   aiGatewayId: string;
   scrapingConfigured: boolean;
+  alertsEnabled: boolean;
+  alertEmail: string;
+  alertsConfigured: boolean;
+  underwriting: UnderwritingDefaults | null;
+  outreach: OutreachDefaults | null;
 }
 
 export interface ConnectorInfo {

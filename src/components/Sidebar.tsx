@@ -10,6 +10,7 @@ import {
   IconGrid,
   IconHammer,
   IconKanban,
+  IconMap,
   IconRadar,
   IconX,
   type IconType,
@@ -27,6 +28,7 @@ const NAV: NavItem[] = [
   { view: "cash_poor", label: "Cash-Poor", icon: IconCash },
   { view: "permit", label: "Permits", icon: IconHammer },
   { view: "lien", label: "Lien Alerts", icon: IconAlert },
+  { view: "map", label: "Map", icon: IconMap },
   { view: "watchlist", label: "Pipeline", icon: IconKanban },
 ];
 

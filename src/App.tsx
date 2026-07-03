@@ -15,6 +15,7 @@ import {
 import { PipelineView } from "./components/Pipeline";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoginPage } from "./components/Login";
+import { MapView } from "./components/MapView";
 
 export default function App() {
   const view = useApp((s) => s.view);
@@ -47,6 +48,7 @@ export default function App() {
           {view === "cash_poor" && <CashPoorView />}
           {view === "permit" && <PermitView />}
           {view === "lien" && <LienView />}
+          {view === "map" && <MapView />}
           {view === "watchlist" && <PipelineView />}
           {view === "settings" && <SettingsView />}
         </main>
