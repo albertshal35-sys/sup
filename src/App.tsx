@@ -14,15 +14,27 @@ import {
 } from "./components/Views";
 import { PipelineView } from "./components/Pipeline";
 import { CommandPalette } from "./components/CommandPalette";
+import { LoginPage } from "./components/Login";
+import { MapView } from "./components/MapView";
 
 export default function App() {
   const view = useApp((s) => s.view);
   const collapsed = useApp((s) => s.collapsed);
+  const auth = useApp((s) => s.auth);
   const loadAll = useApp((s) => s.loadAll);
 
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  if (auth === "checking") {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <span className="h-2 w-2 animate-pulse-dot rounded-full bg-accent" />
+      </div>
+    );
+  }
+  if (auth === "locked") return <LoginPage />;
 
   return (
     <div className="relative min-h-screen">
@@ -36,6 +48,7 @@ export default function App() {
           {view === "cash_poor" && <CashPoorView />}
           {view === "permit" && <PermitView />}
           {view === "lien" && <LienView />}
+          {view === "map" && <MapView />}
           {view === "watchlist" && <PipelineView />}
           {view === "settings" && <SettingsView />}
         </main>

@@ -1,27 +1,61 @@
 /**
  * Custom form/overlay primitives — no native selects, date inputs or menus.
- * All popovers share the same obsidian styling, outside-click dismissal and
- * Escape handling.
+ * Popovers render into a document-body portal with fixed positioning, so
+ * they overlay every container (kanban columns, modals, scroll areas)
+ * instead of being clipped by overflow.
  */
 
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { classNames, shortDate } from "../lib/format";
 import { IconCalendar, IconCheck, IconChevronLeft, IconChevronRight, IconX } from "./icons";
 import { ChevronDown, MoreHorizontal } from "lucide-react";
 
 /* ----------------------------- popover core ----------------------------- */
 
-function useDismiss(open: boolean, close: () => void, ref: React.RefObject<HTMLElement>) {
+interface Anchor {
+  top: number;
+  left?: number;
+  right?: number;
+  width: number;
+}
+
+/** Shared open/anchor/dismiss logic for portal popovers. */
+function usePopover(align: "left" | "right") {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  const close = useCallback(() => setOpen(false), []);
+
+  const toggle = useCallback(() => {
+    setOpen((o) => !o);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    setAnchor({
+      top: r.bottom + 6,
+      left: align === "left" ? r.left : undefined,
+      right: align === "right" ? window.innerWidth - r.right : undefined,
+      width: r.width,
+    });
+  }, [open, align]);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) close();
+      const t = e.target as Node;
+      if (!triggerRef.current?.contains(t) && !popRef.current?.contains(t)) close();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -29,17 +63,60 @@ function useDismiss(open: boolean, close: () => void, ref: React.RefObject<HTMLE
         close();
       }
     };
+    // reposition is fiddly on scroll — just dismiss, like native menus
+    const onScroll = (e: Event) => {
+      if (popRef.current?.contains(e.target as Node)) return;
+      close();
+    };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
     };
-  }, [open, close, ref]);
+  }, [open, close]);
+
+  return { open, toggle, close, anchor, triggerRef, popRef };
 }
 
-const POPOVER =
-  "absolute z-50 mt-1.5 min-w-full animate-scale-in rounded-xl border border-line bg-surface p-1 shadow-pop";
+function Portal({
+  anchor,
+  popRef,
+  matchWidth,
+  children,
+  width,
+}: {
+  anchor: Anchor | null;
+  popRef: React.RefObject<HTMLDivElement>;
+  matchWidth?: boolean;
+  width?: number;
+  children: ReactNode;
+}) {
+  if (!anchor) return null;
+  return createPortal(
+    <div
+      ref={popRef}
+      style={{
+        position: "fixed",
+        top: anchor.top,
+        left: anchor.left,
+        right: anchor.right,
+        minWidth: matchWidth ? anchor.width : undefined,
+        width,
+        zIndex: 90,
+      }}
+      className="animate-scale-in rounded-xl border border-line bg-surface p-1 shadow-pop"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
 
 /* -------------------------------- Toggle -------------------------------- */
 
@@ -62,15 +139,15 @@ export function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={classNames(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors duration-200",
+        "relative h-5 w-9 shrink-0 overflow-hidden rounded-full border transition-colors duration-200",
         checked ? "border-accent/50 bg-accent/80" : "border-line bg-raised",
         disabled && "cursor-not-allowed opacity-40"
       )}
     >
       <span
         className={classNames(
-          "absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200",
-          checked ? "translate-x-[18px]" : "translate-x-0.5"
+          "absolute left-0.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow-sm transition-transform duration-200",
+          checked ? "translate-x-[15px]" : "translate-x-0"
         )}
       />
     </button>
@@ -100,18 +177,14 @@ export function Select<T extends string>({
   className?: string;
   size?: "sm" | "md";
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, toggle, close, anchor, triggerRef, popRef } = usePopover("left");
   const [hi, setHi] = useState(-1);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useDismiss(open, close, ref);
-
   const current = options.find((o) => o.value === value);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
       e.preventDefault();
-      setOpen(true);
+      toggle();
       setHi(Math.max(0, options.findIndex((o) => o.value === value)));
       return;
     }
@@ -125,17 +198,17 @@ export function Select<T extends string>({
     } else if (e.key === "Enter" && hi >= 0) {
       e.preventDefault();
       onChange(options[hi].value);
-      setOpen(false);
+      close();
     }
   };
 
   return (
-    <div ref={ref} className={classNames("relative", className)} onKeyDown={onKeyDown}>
+    <div ref={triggerRef} className={classNames("relative", className)} onKeyDown={onKeyDown}>
       <button
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className={classNames(
           "flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-surface text-left transition-colors hover:border-tx3/40",
           size === "sm" ? "px-2.5 py-1.5 text-xs" : "px-3 py-2 text-[13px]"
@@ -150,30 +223,32 @@ export function Select<T extends string>({
         />
       </button>
       {open && (
-        <div role="listbox" className={POPOVER}>
-          {options.map((o, i) => (
-            <button
-              key={o.value}
-              role="option"
-              aria-selected={o.value === value}
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-              onPointerEnter={() => setHi(i)}
-              className={classNames(
-                "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-xs",
-                i === hi ? "bg-raised text-tx1" : "text-tx2"
-              )}
-            >
-              <span className="truncate">
-                {o.label}
-                {o.hint && <span className="ml-1.5 text-2xs text-tx3">{o.hint}</span>}
-              </span>
-              {o.value === value && <IconCheck className="h-3.5 w-3.5 shrink-0 text-accent" />}
-            </button>
-          ))}
-        </div>
+        <Portal anchor={anchor} popRef={popRef} matchWidth>
+          <div role="listbox">
+            {options.map((o, i) => (
+              <button
+                key={o.value}
+                role="option"
+                aria-selected={o.value === value}
+                onClick={() => {
+                  onChange(o.value);
+                  close();
+                }}
+                onPointerEnter={() => setHi(i)}
+                className={classNames(
+                  "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-xs",
+                  i === hi ? "bg-raised text-tx1" : "text-tx2"
+                )}
+              >
+                <span className="truncate">
+                  {o.label}
+                  {o.hint && <span className="ml-1.5 text-2xs text-tx3">{o.hint}</span>}
+                </span>
+                {o.value === value && <IconCheck className="h-3.5 w-3.5 shrink-0 text-accent" />}
+              </button>
+            ))}
+          </div>
+        </Portal>
       )}
     </div>
   );
@@ -200,20 +275,17 @@ export function Menu({
   align?: "left" | "right";
   header?: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useDismiss(open, close, ref);
+  const { open, toggle, close, anchor, triggerRef, popRef } = usePopover(align);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={triggerRef} className="relative inline-flex">
       <button
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((o) => !o);
+          toggle();
         }}
         className={classNames(
           "rounded-lg transition-colors",
@@ -223,35 +295,30 @@ export function Menu({
         {button ?? <MoreHorizontal strokeWidth={1.75} className="h-4 w-4" />}
       </button>
       {open && (
-        <div
-          role="menu"
-          className={classNames(
-            "absolute z-50 mt-1.5 w-52 animate-scale-in rounded-xl border border-line bg-surface p-1 shadow-pop",
-            align === "right" ? "right-0" : "left-0"
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {header && <div className="border-b border-line px-2.5 py-2">{header}</div>}
-          {items.map((item, i) => (
-            <div key={i}>
-              {item.divider && <div className="mx-1 my-1 border-t border-line" />}
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  item.onSelect();
-                }}
-                className={classNames(
-                  "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-raised",
-                  item.danger ? "text-danger" : "text-tx2 hover:text-tx1"
-                )}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            </div>
-          ))}
-        </div>
+        <Portal anchor={anchor} popRef={popRef} width={208}>
+          <div role="menu">
+            {header && <div className="border-b border-line px-2.5 py-2">{header}</div>}
+            {items.map((item, i) => (
+              <div key={i}>
+                {item.divider && <div className="mx-1 my-1 border-t border-line" />}
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    item.onSelect();
+                  }}
+                  className={classNames(
+                    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-raised",
+                    item.danger ? "text-danger" : "text-tx2 hover:text-tx1"
+                  )}
+                >
+                  {item.icon}
+                  {item.label}
+                </button>
+              </div>
+            ))}
+          </div>
+        </Portal>
       )}
     </div>
   );
@@ -280,15 +347,11 @@ export function DatePicker({
   placeholder?: string;
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useDismiss(open, close, ref);
-
+  const { open, toggle, close, anchor, triggerRef, popRef } = usePopover("left");
   const todayIso = toIso(new Date());
-  const anchor = value ? new Date(value + "T00:00:00") : new Date();
-  const [viewYear, setViewYear] = useState(anchor.getFullYear());
-  const [viewMonth, setViewMonth] = useState(anchor.getMonth());
+  const anchorDate = value ? new Date(value + "T00:00:00") : new Date();
+  const [viewYear, setViewYear] = useState(anchorDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(anchorDate.getMonth());
 
   useEffect(() => {
     if (open && value) {
@@ -312,10 +375,10 @@ export function DatePicker({
   };
 
   return (
-    <div ref={ref} className={classNames("relative", className)}>
+    <div ref={triggerRef} className={classNames("relative", className)}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-left text-xs transition-colors hover:border-tx3/40"
       >
         <span className={classNames("truncate tabular-nums", value ? "text-tx1" : "text-tx3")}>
@@ -347,81 +410,137 @@ export function DatePicker({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1.5 w-60 animate-scale-in rounded-xl border border-line bg-surface p-2.5 shadow-pop">
-          <div className="flex items-center justify-between pb-2">
-            <button
-              onClick={() => shift(-1)}
-              aria-label="Previous month"
-              className="rounded-lg p-1 text-tx3 hover:bg-raised hover:text-tx1"
-            >
-              <IconChevronLeft className="h-3.5 w-3.5" />
-            </button>
-            <span className="text-xs font-semibold text-tx1">
-              {MONTHS[viewMonth]} {viewYear}
-            </span>
-            <button
-              onClick={() => shift(1)}
-              aria-label="Next month"
-              className="rounded-lg p-1 text-tx3 hover:bg-raised hover:text-tx1"
-            >
-              <IconChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="grid grid-cols-7 gap-0.5 pb-1">
-            {WEEKDAYS.map((d) => (
-              <span key={d} className="py-0.5 text-center text-2xs font-medium text-tx3">
-                {d}
+        <Portal anchor={anchor} popRef={popRef} width={240}>
+          <div className="p-1.5">
+            <div className="flex items-center justify-between pb-2">
+              <button
+                onClick={() => shift(-1)}
+                aria-label="Previous month"
+                className="rounded-lg p-1 text-tx3 hover:bg-raised hover:text-tx1"
+              >
+                <IconChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <span className="text-xs font-semibold text-tx1">
+                {MONTHS[viewMonth]} {viewYear}
               </span>
-            ))}
-            {cells.map((day, i) => {
-              if (day == null) return <span key={`x${i}`} />;
-              const iso = toIso(new Date(viewYear, viewMonth, day));
-              const selected = iso === value;
-              const isToday = iso === todayIso;
-              return (
-                <button
-                  key={iso}
-                  onClick={() => {
-                    onChange(iso);
-                    setOpen(false);
-                  }}
-                  className={classNames(
-                    "rounded-lg py-1 text-center text-xs tabular-nums transition-colors",
-                    selected
-                      ? "bg-accent/15 font-semibold text-accent"
-                      : isToday
-                        ? "text-tx1 ring-1 ring-inset ring-line"
-                        : "text-tx2 hover:bg-raised hover:text-tx1"
-                  )}
-                >
-                  {day}
-                </button>
-              );
-            })}
+              <button
+                onClick={() => shift(1)}
+                aria-label="Next month"
+                className="rounded-lg p-1 text-tx3 hover:bg-raised hover:text-tx1"
+              >
+                <IconChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-7 gap-0.5 pb-1">
+              {WEEKDAYS.map((d) => (
+                <span key={d} className="py-0.5 text-center text-2xs font-medium text-tx3">
+                  {d}
+                </span>
+              ))}
+              {cells.map((day, i) => {
+                if (day == null) return <span key={`x${i}`} />;
+                const iso = toIso(new Date(viewYear, viewMonth, day));
+                const selected = iso === value;
+                const isToday = iso === todayIso;
+                return (
+                  <button
+                    key={iso}
+                    onClick={() => {
+                      onChange(iso);
+                      close();
+                    }}
+                    className={classNames(
+                      "rounded-lg py-1 text-center text-xs tabular-nums transition-colors",
+                      selected
+                        ? "bg-accent/15 font-semibold text-accent"
+                        : isToday
+                          ? "text-tx1 ring-1 ring-inset ring-line"
+                          : "text-tx2 hover:bg-raised hover:text-tx1"
+                    )}
+                  >
+                    {day}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between border-t border-line pt-1.5">
+              <button
+                onClick={() => {
+                  onChange(todayIso);
+                  close();
+                }}
+                className="rounded-lg px-2 py-1 text-2xs font-medium text-accent hover:bg-accent/10"
+              >
+                Today
+              </button>
+              <button
+                onClick={() => {
+                  onChange(null);
+                  close();
+                }}
+                className="rounded-lg px-2 py-1 text-2xs text-tx3 hover:bg-raised hover:text-tx1"
+              >
+                Clear
+              </button>
+            </div>
           </div>
-          <div className="flex items-center justify-between border-t border-line pt-1.5">
-            <button
-              onClick={() => {
-                onChange(todayIso);
-                setOpen(false);
-              }}
-              className="rounded-lg px-2 py-1 text-2xs font-medium text-accent hover:bg-accent/10"
-            >
-              Today
-            </button>
-            <button
-              onClick={() => {
-                onChange(null);
-                setOpen(false);
-              }}
-              className="rounded-lg px-2 py-1 text-2xs text-tx3 hover:bg-raised hover:text-tx1"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
+        </Portal>
       )}
     </div>
+  );
+}
+
+/* -------------------------------- Modal -------------------------------- */
+
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  maxWidth = "max-w-lg",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  maxWidth?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center sm:p-6">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={classNames(
+          "card relative flex max-h-[88vh] w-full animate-scale-in flex-col overflow-hidden rounded-t-3xl !bg-surface shadow-pop sm:rounded-2xl",
+          maxWidth
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+          <h2 className="font-display text-[15px] font-bold tracking-tight text-tx1">{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-lg p-1.5 text-tx2 transition-colors hover:bg-raised"
+          >
+            <IconX className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -454,6 +573,41 @@ export function TextField({
       placeholder={placeholder}
       className={classNames(
         "w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs text-tx1 placeholder:text-tx3 transition-colors focus:border-accent/40 focus:outline-none disabled:opacity-40",
+        className
+      )}
+    />
+  );
+}
+
+/* ------------------------------ TextArea ------------------------------ */
+
+export function TextArea({
+  value,
+  onChange,
+  placeholder,
+  onBlur,
+  rows = 2,
+  className,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  onBlur?: () => void;
+  rows?: number;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <textarea
+      rows={rows}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      placeholder={placeholder}
+      className={classNames(
+        "w-full resize-none rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs text-tx1 placeholder:text-tx3 transition-colors focus:border-accent/40 focus:outline-none disabled:opacity-40",
         className
       )}
     />

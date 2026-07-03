@@ -2,7 +2,10 @@
 
 import { json, type Env } from "./index";
 import { runIngestionPipeline, runSingleConnector, CONNECTOR_IDS } from "./ingest";
-import { encryptSecret, tokenMatches } from "./crypto";
+import { encryptSecret } from "./crypto";
+import { authConfigured, loginWithCode, verifySession } from "./auth";
+import { aiAvailable, generateBrief, generateOutreach } from "./ai";
+import { sendTestDigest } from "./alerts";
 
 type Handler = (
   req: Request,
@@ -21,29 +24,45 @@ function route(method: string, path: string, handler: Handler) {
   routes.push({ method, pattern, keys, handler });
 }
 
+const PUBLIC_PATHS = new Set(["/api/auth/login", "/api/webhooks/records"]);
+
 export async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
+
+  // One code unlocks the product: every /api route (data, CRM, admin, AI)
+  // requires a valid session except login itself and HMAC-verified webhooks.
+  if (!PUBLIC_PATHS.has(url.pathname) && authConfigured(env)) {
+    if (!(await verifySession(env, req.headers.get("Authorization")))) {
+      return json({ error: "unauthorized" }, env, 401);
+    }
+  }
+
   for (const r of routes) {
     if (r.method !== req.method) continue;
     const m = url.pathname.match(r.pattern);
     if (!m) continue;
     const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-    if (url.pathname.startsWith("/api/admin/") && !isAdmin(req, env)) {
-      return json({ error: "unauthorized" }, env, 401);
-    }
     return r.handler(req, env, params, url);
   }
   if (req.method === "POST" && url.pathname === "/api/admin/run-ingestion") {
-    if (!isAdmin(req, env)) return json({ error: "unauthorized" }, env, 401);
     ctx.waitUntil(runIngestionPipeline(env, new Date()));
     return json({ ok: true, started: true }, env, 202);
   }
   return json({ error: "not_found" }, env, 404);
 }
 
-function isAdmin(req: Request, env: Env): boolean {
-  return tokenMatches(req.headers.get("Authorization"), env.ADMIN_TOKEN);
-}
+/* ------------------------------- auth ------------------------------- */
+
+route("POST", "/api/auth/login", async (req, env) => {
+  if (!authConfigured(env)) {
+    // No ACCESS_CODE secret yet — open access so first-run setup isn't locked out.
+    return json({ token: "open-access", authRequired: false }, env);
+  }
+  const body = (await req.json().catch(() => ({}))) as { code?: string };
+  const token = await loginWithCode(env, body.code ?? "");
+  if (!token) return json({ error: "invalid_code" }, env, 401);
+  return json({ token, authRequired: true }, env);
+});
 
 /** demo → feeds include seeded rows; live → only real ingested records. */
 async function getDataMode(env: Env): Promise<"demo" | "live"> {
@@ -55,17 +74,33 @@ async function getDataMode(env: Env): Promise<"demo" | "live"> {
 /* ---------------------------- public settings ---------------------------- */
 
 route("GET", "/api/settings", async (_req, env) => {
-  const [mode, marketsRow] = await Promise.all([
-    getDataMode(env),
-    env.DB.prepare("SELECT value FROM app_settings WHERE key = 'markets'").first<{ value: string }>(),
-  ]);
-  let markets: string[] = [];
-  try {
-    markets = marketsRow ? (JSON.parse(marketsRow.value) as string[]) : [];
-  } catch {
-    /* keep [] */
-  }
-  return json({ dataMode: mode, markets }, env);
+  const rows = await env.DB.prepare(
+    `SELECT key, value FROM app_settings WHERE key IN
+     ('data_mode','markets','ai_gateway_id','alerts_enabled','alert_email','underwriting','outreach')`
+  ).all<{ key: string; value: string }>();
+  const map = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
+  const parse = (v: string | undefined) => {
+    try {
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
+  };
+  return json(
+    {
+      dataMode: map.data_mode === "live" ? "live" : "demo",
+      markets: parse(map.markets) ?? [],
+      aiEnabled: aiAvailable(env),
+      aiGatewayId: map.ai_gateway_id || "",
+      scrapingConfigured: Boolean(env.CF_ACCOUNT_ID && env.CF_API_TOKEN),
+      alertsEnabled: map.alerts_enabled === "true",
+      alertEmail: map.alert_email || "",
+      alertsConfigured: Boolean(env.RESEND_API_KEY),
+      underwriting: parse(map.underwriting),
+      outreach: parse(map.outreach),
+    },
+    env
+  );
 });
 
 /* ---------------------------- health ---------------------------- */
@@ -120,7 +155,7 @@ const FEED_SQL = `
   SELECT t.id, t.kind, t.score, t.urgency, t.headline, t.payload_json, t.detected_at, t.status,
          e.id AS entity_id, e.name AS entity_name, e.kind AS entity_kind, e.principal_name,
          e.flips_36mo, e.avg_margin_pct, e.velocity_score,
-         p.address, p.city, p.county, p.state, p.est_value,
+         p.address, p.city, p.county, p.state, p.est_value, p.lat, p.lng,
          c.phone, c.email, c.confidence AS contact_confidence
   FROM triggers t
   JOIN entities e ON e.id = t.entity_id
@@ -314,6 +349,7 @@ route("DELETE", "/api/watchlist/:entityId", async (req, env, params, url) => {
 route("GET", "/api/admin/connectors", async (_req, env) => {
   const rows = await env.DB.prepare(
     `SELECT cc.id, cc.label, cc.enabled, cc.base_url, cc.api_key_last4,
+            cc.mode, cc.scrape_url, cc.notes,
             r.status AS run_status, r.finished_at AS run_finished, r.rows_ingested AS run_rows
      FROM connector_config cc
      LEFT JOIN ingestion_runs r ON r.connector = cc.id
@@ -321,6 +357,7 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
      ORDER BY cc.rowid`
   ).all<{
     id: string; label: string; enabled: number; base_url: string | null; api_key_last4: string | null;
+    mode: string; scrape_url: string | null; notes: string | null;
     run_status: string | null; run_finished: string | null; run_rows: number | null;
   }>();
   return json(
@@ -331,6 +368,9 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
         enabled: Boolean(r.enabled),
         baseUrl: r.base_url,
         apiKeyLast4: r.api_key_last4,
+        mode: r.mode === "scrape" ? "scrape" : "api",
+        scrapeUrl: r.scrape_url,
+        notes: r.notes,
         lastRun: r.run_status
           ? { status: r.run_status, finishedAt: r.run_finished, rowsIngested: r.run_rows ?? 0 }
           : null,
@@ -348,6 +388,9 @@ route("PUT", "/api/admin/connectors/:id", async (req, env, params) => {
     enabled?: boolean;
     baseUrl?: string;
     apiKey?: string;
+    mode?: string;
+    scrapeUrl?: string;
+    notes?: string;
   };
   if (typeof body.enabled === "boolean") {
     await env.DB.prepare(
@@ -363,9 +406,31 @@ route("PUT", "/api/admin/connectors/:id", async (req, env, params) => {
       .bind(body.baseUrl.trim() || null, params.id)
       .run();
   }
+  if (body.mode === "api" || body.mode === "scrape") {
+    await env.DB.prepare(
+      "UPDATE connector_config SET mode = ?1, updated_at = datetime('now') WHERE id = ?2"
+    )
+      .bind(body.mode, params.id)
+      .run();
+  }
+  if (typeof body.scrapeUrl === "string") {
+    await env.DB.prepare(
+      "UPDATE connector_config SET scrape_url = ?1, updated_at = datetime('now') WHERE id = ?2"
+    )
+      .bind(body.scrapeUrl.trim() || null, params.id)
+      .run();
+  }
+  if (typeof body.notes === "string") {
+    await env.DB.prepare(
+      "UPDATE connector_config SET notes = ?1, updated_at = datetime('now') WHERE id = ?2"
+    )
+      .bind(body.notes.trim() || null, params.id)
+      .run();
+  }
   if (typeof body.apiKey === "string" && body.apiKey.length > 0) {
-    if (!env.ADMIN_TOKEN) return json({ error: "admin_token_not_configured" }, env, 503);
-    const { ct, iv } = await encryptSecret(env.ADMIN_TOKEN, body.apiKey);
+    const kek = env.ACCESS_CODE || env.ADMIN_TOKEN;
+    if (!kek) return json({ error: "access_code_not_configured" }, env, 503);
+    const { ct, iv } = await encryptSecret(kek, body.apiKey);
     await env.DB.prepare(
       `UPDATE connector_config SET api_key_ct = ?1, api_key_iv = ?2, api_key_last4 = ?3,
        updated_at = datetime('now') WHERE id = ?4`
@@ -386,12 +451,39 @@ route("PUT", "/api/admin/settings", async (req, env) => {
   const body = (await req.json().catch(() => ({}))) as {
     dataMode?: string;
     markets?: string[];
+    aiGatewayId?: string;
+    alertsEnabled?: boolean;
+    alertEmail?: string;
+    underwriting?: Record<string, unknown>;
+    outreach?: Record<string, unknown>;
   };
   if (body.dataMode === "demo" || body.dataMode === "live") {
     await env.DB.prepare(
       "INSERT INTO app_settings (key, value) VALUES ('data_mode', ?1) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
     )
       .bind(body.dataMode)
+      .run();
+  }
+  const upsertSetting = async (key: string, value: string) => {
+    await env.DB.prepare(
+      "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
+    )
+      .bind(key, value)
+      .run();
+  };
+  if (typeof body.alertsEnabled === "boolean") await upsertSetting("alerts_enabled", String(body.alertsEnabled));
+  if (typeof body.alertEmail === "string") await upsertSetting("alert_email", body.alertEmail.trim().slice(0, 200));
+  if (body.underwriting && typeof body.underwriting === "object") {
+    await upsertSetting("underwriting", JSON.stringify(body.underwriting).slice(0, 2000));
+  }
+  if (body.outreach && typeof body.outreach === "object") {
+    await upsertSetting("outreach", JSON.stringify(body.outreach).slice(0, 2000));
+  }
+  if (typeof body.aiGatewayId === "string") {
+    await env.DB.prepare(
+      "INSERT INTO app_settings (key, value) VALUES ('ai_gateway_id', ?1) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
+    )
+      .bind(body.aiGatewayId.trim())
       .run();
   }
   if (Array.isArray(body.markets)) {
@@ -429,6 +521,68 @@ route("POST", "/api/admin/purge-demo", async (_req, env) => {
     deleted += res.meta.changes ?? 0;
   }
   return json({ ok: true, deleted }, env);
+});
+
+/* ------------------------------- AI ------------------------------- */
+
+route("POST", "/api/ai/brief/:entityId", async (_req, env, params) => {
+  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
+  const [entity, loans, triggers, txs] = await Promise.all([
+    env.DB.prepare("SELECT * FROM entities WHERE id = ?1").bind(params.entityId).first(),
+    env.DB.prepare(
+      "SELECT lender_name, principal, rate_pct, originated_at, maturity_date, status FROM loans WHERE entity_id = ?1 ORDER BY originated_at DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare(
+      "SELECT kind, headline, score FROM triggers WHERE entity_id = ?1 AND status NOT IN ('dismissed','converted') ORDER BY score DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare(
+      "SELECT side, price, is_cash, recorded_at FROM transactions WHERE entity_id = ?1 ORDER BY recorded_at DESC LIMIT 20"
+    ).bind(params.entityId).all(),
+  ]);
+  if (!entity) return json({ error: "not_found" }, env, 404);
+  try {
+    const brief = await generateBrief(
+      env,
+      JSON.stringify({ entity, loans: loans.results, signals: triggers.results, transactions: txs.results })
+    );
+    return json({ brief }, env);
+  } catch (err) {
+    return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
+  }
+});
+
+route("POST", "/api/admin/alerts/test", async (_req, env) => {
+  if (!env.RESEND_API_KEY) return json({ error: "resend_not_configured" }, env, 503);
+  const res = await sendTestDigest(env);
+  return json(res, env, res.ok ? 200 : 502);
+});
+
+route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
+  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
+  const body = (await req.json().catch(() => ({}))) as { channel?: string };
+  const channel = body.channel === "sms" ? "sms" : "email";
+  const [entity, loans, triggers, identityRow] = await Promise.all([
+    env.DB.prepare("SELECT * FROM entities WHERE id = ?1").bind(params.entityId).first(),
+    env.DB.prepare(
+      "SELECT lender_name, principal, rate_pct, originated_at, maturity_date, status FROM loans WHERE entity_id = ?1 ORDER BY originated_at DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare(
+      "SELECT kind, headline, score FROM triggers WHERE entity_id = ?1 AND status NOT IN ('dismissed','converted') ORDER BY score DESC LIMIT 10"
+    ).bind(params.entityId).all(),
+    env.DB.prepare("SELECT value FROM app_settings WHERE key = 'outreach'").first<{ value: string }>(),
+  ]);
+  if (!entity) return json({ error: "not_found" }, env, 404);
+  try {
+    const message = await generateOutreach(
+      env,
+      channel,
+      JSON.stringify({ entity, loans: loans.results, signals: triggers.results }),
+      identityRow?.value ?? "a private lender"
+    );
+    return json({ message }, env);
+  } catch (err) {
+    return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
+  }
 });
 
 /* ------------------------ inbound webhooks ------------------------ */

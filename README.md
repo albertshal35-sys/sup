@@ -48,10 +48,16 @@ npm run deploy                              # build UI + deploy Worker (assets +
 build, `d1 migrations apply`, `wrangler deploy`. Add `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID` repository secrets to enable it.
 
-**Going live:** open **Settings** in the app → save your `ADMIN_TOKEN` → configure each
-connector (vendor base URL + API key) → flip **Demo → Live** → optionally purge sample
-rows. The vendor payload contract each connector expects is documented at the top of
-`worker/src/ingest.ts`.
+**Access:** the whole app sits behind an access code — set `wrangler secret put ACCESS_CODE`
+and share the code with your team. It doubles as the encryption key for stored vendor keys.
+
+**Going live:** live data is the default. Open **Settings** → configure each data source —
+**Scrape** mode points a Cloudflare headless browser (Browser Rendering; needs `CF_ACCOUNT_ID`
+var + `CF_API_TOKEN` secret) at recorder/permit portals and Workers AI
+(`@cf/moonshotai/kimi-k2.6`, routed through your AI Gateway for centralized billing) extracts
+clean records; **API** mode takes a vendor base URL + key (contract documented at the top of
+`worker/src/ingest.ts`). Contact enrichment is Apollo-compatible. Suggested portals for each
+source are listed inline in Settings.
 
 ## API surface
 

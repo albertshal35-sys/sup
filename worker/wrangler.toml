@@ -18,13 +18,18 @@ binding = "DB"
 database_name = "lienwolf-db"
 database_id = "67867b42-9149-4509-9b09-c24ad087f1c6"
 
+# Workers AI (analysis/enrichment through AI Gateway for centralized billing;
+# set the gateway id in Settings → AI pipeline)
+[ai]
+binding = "AI"
+
 [vars]
-# CORS origin of the Pages frontend
 ALLOWED_ORIGIN = "*"
+AI_MODEL = "@cf/moonshotai/kimi-k2.6"
+# CF_ACCOUNT_ID = "..."   # required for Browser Rendering (headless scraping)
 
 # Secrets (set via `wrangler secret put <NAME> --config worker/wrangler.toml`):
-#   ADMIN_TOKEN         - bearer for /api/admin/* + KEK for stored vendor keys
+#   ACCESS_CODE         - login code that unlocks the app; also the KEK for stored vendor keys
+#   CF_API_TOKEN        - Cloudflare API token with Browser Rendering permission (scraping)
 #   WEBHOOK_SECRET      - HMAC secret for inbound record webhooks
-#   COUNTY_API_KEY      - fallback county recorder key (UI-managed keys preferred)
-#   PERMIT_API_KEY      - fallback permit aggregator key
-#   SKIP_TRACE_API_KEY  - fallback skip-trace key
+#   COUNTY_API_KEY / PERMIT_API_KEY / SKIP_TRACE_API_KEY - optional env fallbacks for vendor keys

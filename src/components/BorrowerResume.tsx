@@ -14,6 +14,68 @@ import {
 import { UrgencyPill } from "./primitives";
 import { DatePicker, TextField } from "./ui";
 import { IconChevronRight, IconPulse } from "./icons";
+import { fetchAiBrief, fetchOutreach } from "../lib/api";
+import { Copy, FileText, Send, Sparkles } from "lucide-react";
+import { Select } from "./ui";
+import { QuoteModal } from "./QuoteModal";
+
+/* --------------------------- AI brief --------------------------- */
+/* One click: kimi-k2.6 (via AI Gateway) synthesizes every signal, the
+   36-month history and cost of capital into an outreach brief. */
+
+function AiBrief({ entityId }: { entityId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [brief, setBrief] = useState("");
+
+  useEffect(() => {
+    setState("idle");
+    setBrief("");
+  }, [entityId]);
+
+  const generate = async () => {
+    setState("loading");
+    const res = await fetchAiBrief(entityId);
+    if ("brief" in res) {
+      setBrief(res.brief);
+      setState("done");
+    } else {
+      setBrief(
+        res.error === "ai_not_configured" || res.error === "offline"
+          ? "AI briefs activate once the Worker is deployed with the Workers AI binding."
+          : "Brief generation failed — try again in a moment."
+      );
+      setState("error");
+    }
+  };
+
+  return (
+    <section className="mt-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-2xs font-medium text-tx3">AI Outreach Brief</h3>
+        <button
+          onClick={() => void generate()}
+          disabled={state === "loading"}
+          className="flex items-center gap-1.5 rounded-lg border border-violet/30 bg-violet/10 px-2.5 py-1 text-2xs font-medium text-violet transition-colors hover:bg-violet/20 disabled:opacity-50"
+        >
+          <Sparkles strokeWidth={1.75} className="h-3 w-3" />
+          {state === "loading" ? "Analyzing…" : state === "done" ? "Regenerate" : "Generate"}
+        </button>
+      </div>
+      {state !== "idle" && (
+        <p
+          className={classNames(
+            "mt-2 whitespace-pre-wrap rounded-xl border px-3.5 py-3 text-xs leading-relaxed",
+            state === "error"
+              ? "border-line bg-raised/60 text-tx3"
+              : "border-violet/20 bg-violet/[0.05] text-tx2"
+          )}
+        >
+          {state === "loading" ? "Reading signals, history and cost of capital…" : brief}
+        </p>
+      )}
+    </section>
+  );
+}
 
 /* ------------------------- CRM panel ------------------------- */
 
@@ -119,6 +181,133 @@ function CrmPanel({ entityId, entityName }: { entityId: string; entityName: stri
             </li>
           ))}
         </ol>
+      )}
+    </section>
+  );
+}
+
+/* --------------------- AI outreach composer --------------------- */
+
+function OutreachComposer({ entityId }: { entityId: string }) {
+  const outreachDefaults = useApp((s) => s.serverSettings?.outreach);
+  const logLeadActivity = useApp((s) => s.logLeadActivity);
+  const setLeadFollowUp = useApp((s) => s.setLeadFollowUp);
+  const lead = useApp((s) => s.pipeline[entityId]);
+  const [channel, setChannel] = useState<"email" | "sms">(outreachDefaults?.defaultChannel ?? "email");
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [draft, setDraft] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setState("idle");
+    setDraft("");
+  }, [entityId]);
+
+  const generate = async () => {
+    setState("loading");
+    const res = await fetchOutreach(entityId, channel);
+    if ("message" in res) {
+      const sig = channel === "email" && outreachDefaults?.signature ? `\n\n${outreachDefaults.signature}` : "";
+      setDraft(res.message + sig);
+      setState("ready");
+    } else {
+      setDraft(
+        res.error === "ai_not_configured" || res.error === "offline"
+          ? "AI outreach activates once the Worker is deployed with the Workers AI binding."
+          : "Draft generation failed — try again in a moment."
+      );
+      setState("error");
+    }
+  };
+
+  const logTouch = () => {
+    logLeadActivity(entityId, channel === "email" ? "email" : "call", `Sent ${channel} outreach draft`);
+    if (lead && !lead.followUp) {
+      const d = new Date(Date.now() + 3 * 86_400_000);
+      setLeadFollowUp(entityId, d.toISOString().slice(0, 10));
+    }
+  };
+
+  const mailto = () => {
+    const lines = draft.split("\n");
+    let subject = "Financing for your project";
+    let body = draft;
+    if (lines[0]?.toLowerCase().startsWith("subject:")) {
+      subject = lines[0].slice(8).trim();
+      body = lines.slice(1).join("\n").trim();
+    }
+    window.open(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+    logTouch();
+  };
+
+  return (
+    <section className="mt-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-2xs font-medium text-tx3">AI Outreach Draft</h3>
+        <div className="flex items-center gap-1.5">
+          <Select
+            size="sm"
+            className="w-24"
+            value={channel}
+            options={[
+              { value: "email" as const, label: "Email" },
+              { value: "sms" as const, label: "SMS" },
+            ]}
+            onChange={setChannel}
+          />
+          <button
+            onClick={() => void generate()}
+            disabled={state === "loading"}
+            className="flex items-center gap-1.5 rounded-lg border border-violet/30 bg-violet/10 px-2.5 py-1.5 text-2xs font-medium text-violet transition-colors hover:bg-violet/20 disabled:opacity-50"
+          >
+            <Sparkles strokeWidth={1.75} className="h-3 w-3" />
+            {state === "loading" ? "Writing…" : state === "ready" ? "Regenerate" : "Generate"}
+          </button>
+        </div>
+      </div>
+
+      {state !== "idle" && (
+        <div className="mt-2">
+          {state === "error" ? (
+            <p className="rounded-xl border border-line bg-raised/60 px-3.5 py-3 text-xs text-tx3">{draft}</p>
+          ) : (
+            <>
+              <textarea
+                rows={channel === "email" ? 8 : 4}
+                value={state === "loading" ? "Reading their signals, projects and cost of capital…" : draft}
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={state === "loading"}
+                className="w-full resize-y rounded-xl border border-violet/20 bg-violet/[0.04] px-3.5 py-3 text-xs leading-relaxed text-tx1 focus:border-violet/40 focus:outline-none disabled:text-tx3"
+              />
+              {state === "ready" && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      void navigator.clipboard.writeText(draft);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                      logTouch();
+                    }}
+                    className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-2xs font-medium text-tx2 transition-colors hover:text-tx1"
+                  >
+                    <Copy strokeWidth={1.75} className="h-3 w-3" />
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  {channel === "email" && (
+                    <button
+                      onClick={mailto}
+                      className="flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-2xs font-medium text-accent transition-colors hover:bg-accent/20"
+                    >
+                      <Send strokeWidth={1.75} className="h-3 w-3" />
+                      Open in Mail
+                    </button>
+                  )}
+                  <span className="text-2xs text-tx3">Logs a touch + sets follow-up if unset</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       )}
     </section>
   );
@@ -280,9 +469,8 @@ function VelocityRing({ score }: { score: number }) {
           strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)} className={tone}
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="font-display text-base font-bold tabular-nums text-tx1">{score}</span>
-        <span className="text-[9px] text-tx3">velocity</span>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="font-display text-xl font-bold tabular-nums text-tx1">{score}</span>
       </div>
     </div>
   );
@@ -304,6 +492,9 @@ export function BorrowerResumeModal() {
   const close = useApp((s) => s.closeResume);
   const toggleWatch = useApp((s) => s.toggleWatch);
   const pipeline = useApp((s) => s.pipeline);
+  const [quoteOpen, setQuoteOpen] = useState(false);
+
+  useEffect(() => setQuoteOpen(false), [resume?.entity.id]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
@@ -376,6 +567,14 @@ export function BorrowerResumeModal() {
           </div>
           <div className="flex items-center gap-1">
             <button
+              onClick={() => setQuoteOpen(true)}
+              title="Quote & term sheet"
+              className="flex items-center gap-1.5 rounded-xl border border-ok/30 bg-ok/10 px-2.5 py-1.5 text-xs font-medium text-ok transition-colors hover:bg-ok/20"
+            >
+              <FileText strokeWidth={1.75} className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Quote</span>
+            </button>
+            <button
               onClick={() => toggleWatch(e.id, e.name)}
               title={watched ? "Remove from pipeline" : "Save lead to pipeline"}
               className={classNames(
@@ -410,6 +609,10 @@ export function BorrowerResumeModal() {
           </div>
 
           <CrmPanel entityId={e.id} entityName={e.name} />
+
+          <AiBrief entityId={e.id} />
+
+          <OutreachComposer entityId={e.id} />
 
           <NetworkSection network={resume.network} />
 
@@ -546,6 +749,25 @@ export function BorrowerResumeModal() {
           )}
         </div>
       </div>
+
+      <QuoteModal
+        open={quoteOpen}
+        onClose={() => setQuoteOpen(false)}
+        entityId={e.id}
+        entityName={e.name}
+        address={resume.loans.find((l) => l.status === "active")?.address ?? null}
+        defaultAmount={
+          pipeline[e.id]?.dealValue ??
+          resume.loans.find((l) => l.status === "active")?.principal ??
+          null
+        }
+        lastRate={
+          [...resume.loans]
+            .filter((l) => l.ratePct != null)
+            .sort((a, b) => b.originatedAt.localeCompare(a.originatedAt))[0]?.ratePct ?? null
+        }
+        estValue={null}
+      />
     </div>
   );
 }

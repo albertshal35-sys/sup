@@ -259,9 +259,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'demo');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'live');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_model', '@cf/moonshotai/kimi-k2.6');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_gateway_id', '');
 INSERT OR IGNORE INTO app_settings (key, value) VALUES
-  ('markets', '["Maricopa, AZ","Travis, TX","Miami-Dade, FL","Hillsborough, FL"]');
+  ('markets', '["Kings, NY","Queens, NY","Bronx, NY","New York, NY","Richmond, NY"]');
 
 -- ------------------------------------------------------------
 -- Vendor connector configuration. API keys are AES-GCM encrypted
@@ -276,6 +278,9 @@ CREATE TABLE IF NOT EXISTS connector_config (
   api_key_ct    TEXT,                  -- base64 ciphertext
   api_key_iv    TEXT,                  -- base64 IV
   api_key_last4 TEXT,
+  mode          TEXT NOT NULL DEFAULT 'api' CHECK (mode IN ('api','scrape')),
+  scrape_url    TEXT,                  -- portal search/results URL for headless scraping
+  notes         TEXT,                  -- operator notes fed to the AI normalizer
   updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 INSERT OR IGNORE INTO connector_config (id, label) VALUES
@@ -283,7 +288,7 @@ INSERT OR IGNORE INTO connector_config (id, label) VALUES
   ('county_loans', 'County recorder — deeds of trust'),
   ('permits', 'Municipal permits'),
   ('liens', 'Mechanics liens'),
-  ('skip_trace', 'Skip trace / contact enrichment');
+  ('skip_trace', 'Contact enrichment (Apollo-compatible)');
 
 -- ------------------------------------------------------------
 -- Hardened ingestion audit log: one row per connector per run.

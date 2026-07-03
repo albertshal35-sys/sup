@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 INSERT OR IGNORE INTO app_settings (key, value) VALUES ('data_mode', 'demo');
 INSERT OR IGNORE INTO app_settings (key, value) VALUES
-  ('markets', '["Maricopa, AZ","Travis, TX","Miami-Dade, FL","Hillsborough, FL"]');
+  ('markets', '["Kings, NY","Queens, NY","Bronx, NY","New York, NY","Richmond, NY"]');
 
 -- ------------------------------------------------------------
 -- Vendor connector configuration. API keys are AES-GCM encrypted

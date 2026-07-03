@@ -9,6 +9,7 @@ const TITLES: Record<View, { title: string; sub: string }> = {
   cash_poor: { title: "Cash-Poor Buyers", sub: "Multiple all-cash buys < 60 days — delayed financing" },
   permit: { title: "Permit Intelligence", sub: "Ground-up & structural filings, matched to principals" },
   lien: { title: "Lien Monitoring", sub: "Fresh mechanics liens — frozen draws, rescue capital" },
+  map: { title: "Borough Map", sub: "Every live signal across the five boroughs" },
   watchlist: { title: "Pipeline", sub: "Saved leads — watching through funded" },
   settings: { title: "Settings", sub: "Data sources, integrations & administration" },
 };
@@ -80,14 +81,6 @@ export function TopBar() {
           <IconSearch className="h-4 w-4" />
         </button>
 
-        <button
-          onClick={toggleTheme}
-          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          className="rounded-lg p-2 text-tx2 transition-colors hover:bg-raised hover:text-tx1"
-        >
-          {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
-        </button>
-
         {/* Profile */}
         <Menu
           align="right"
@@ -118,8 +111,7 @@ export function TopBar() {
               divider: true,
               danger: true,
               onSelect: () => {
-                localStorage.removeItem("lienwolf-ui");
-                window.location.reload();
+                useApp.getState().logout();
               },
             },
           ]}
