@@ -490,6 +490,60 @@ export function DatePicker({
   );
 }
 
+/* -------------------------------- Modal -------------------------------- */
+
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  maxWidth = "max-w-lg",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  maxWidth?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center sm:p-6">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={classNames(
+          "card relative flex max-h-[88vh] w-full animate-scale-in flex-col overflow-hidden rounded-t-3xl !bg-surface shadow-pop sm:rounded-2xl",
+          maxWidth
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+          <h2 className="font-display text-[15px] font-bold tracking-tight text-tx1">{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-lg p-1.5 text-tx2 transition-colors hover:bg-raised"
+          >
+            <IconX className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 /* ------------------------------ TextField ------------------------------ */
 
 export function TextField({

@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ExternalLink,
   Hammer,
+  HelpCircle,
   LayoutGrid,
   Mail,
   Menu,
@@ -64,5 +65,6 @@ export const IconChevronLeft = tune(ChevronLeft);
 export const IconKanban = tune(SquareKanban);
 export const IconCalendar = tune(CalendarDays);
 export const IconPlus = tune(Plus);
+export const IconHelp = tune(HelpCircle);
 export const IconCollapse = tune(PanelLeftClose);
 export const IconExpand = tune(PanelLeftOpen);

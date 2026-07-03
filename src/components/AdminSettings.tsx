@@ -9,17 +9,106 @@ import { useApp } from "../store";
 import { admin, probeSettings } from "../lib/api";
 import type { ConnectorInfo } from "../types";
 import { ago, classNames } from "../lib/format";
-import { Toggle, TextField, TextArea, Select } from "./ui";
-import { IconAlert, IconPulse, IconX } from "./icons";
+import { Toggle, TextField, TextArea, Select, Modal } from "./ui";
+import { IconAlert, IconHelp, IconPulse, IconX } from "./icons";
 import { Sparkles } from "lucide-react";
 
-function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  sub,
+  children,
+  onHelp,
+}: {
+  title: string;
+  sub?: string;
+  children: React.ReactNode;
+  onHelp?: () => void;
+}) {
   return (
     <section className="card p-5">
-      <h3 className="text-[13px] font-semibold text-tx1">{title}</h3>
+      <div className="flex items-center gap-1.5">
+        <h3 className="text-[13px] font-semibold text-tx1">{title}</h3>
+        {onHelp && (
+          <button
+            onClick={onHelp}
+            aria-label={`How to set up ${title}`}
+            title="Setup guide"
+            className="rounded-full p-0.5 text-tx3 transition-colors hover:bg-raised hover:text-accent"
+          >
+            <IconHelp className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
       {sub && <p className="mt-1 max-w-xl text-2xs text-tx3">{sub}</p>}
       <div className="mt-3.5">{children}</div>
     </section>
+  );
+}
+
+/* --------------------------- setup guide --------------------------- */
+
+function GuideStep({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-2xs font-bold tabular-nums text-accent">
+        {n}
+      </span>
+      <div className="min-w-0">
+        <div className="text-xs font-semibold text-tx1">{title}</div>
+        <div className="mt-0.5 text-2xs leading-relaxed text-tx2">{children}</div>
+      </div>
+    </li>
+  );
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-raised px-1 py-0.5 font-mono text-[10px] text-tx1">{children}</code>
+  );
+}
+
+function SetupGuideModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Setting up live data" maxWidth="max-w-xl">
+      <ol className="flex flex-col gap-4">
+        <GuideStep n={1} title="Deploy & lock the app">
+          Merges to main auto-deploy (needs <Code>CLOUDFLARE_API_TOKEN</Code> +{" "}
+          <Code>CLOUDFLARE_ACCOUNT_ID</Code> GitHub secrets). Set your login code once:{" "}
+          <Code>npx wrangler secret put ACCESS_CODE --config worker/wrangler.toml</Code>. Everyone
+          with the code gets in; it also encrypts stored vendor keys.
+        </GuideStep>
+        <GuideStep n={2} title="Enable the headless browser (scraping)">
+          Scrape mode uses Cloudflare Browser Rendering — a managed headless Chrome fleet. Create an
+          API token in the Cloudflare dashboard with the <em>Browser Rendering: Edit</em>{" "}
+          permission, then <Code>npx wrangler secret put CF_API_TOKEN</Code> and set{" "}
+          <Code>CF_ACCOUNT_ID</Code> under <Code>[vars]</Code> in <Code>worker/wrangler.toml</Code>.
+          Redeploy. The status line in the AI pipeline card below confirms when it's active.
+        </GuideStep>
+        <GuideStep n={3} title="Route AI through your Gateway">
+          Workers AI ships with the deploy (model <Code>@cf/moonshotai/kimi-k2.6</Code>). In the
+          Cloudflare dashboard: AI → AI Gateway → Create gateway, then paste its ID in the AI
+          pipeline card — every extraction and brief routes through it for centralized billing,
+          caching and logs.
+        </GuideStep>
+        <GuideStep n={4} title="Point each source at NYC">
+          For ACRIS deeds/mortgages and DOB permits, prefer <em>Vendor API</em> mode with the free
+          NYC Open Data endpoints (see suggested sources on each card). For portals without APIs —
+          Richmond County Clerk, borough clerk lien indexes — pick <em>Scrape</em>, paste the
+          search-results URL, and use the notes box to tell the AI what to look for (document
+          types, date filters, county quirks). Enable each connector when configured.
+        </GuideStep>
+        <GuideStep n={5} title="Test with Run now">
+          Each card's <em>Run now</em> triggers that connector immediately; status, row counts and
+          retries appear on the card and in the Data Pipeline tile on Command. Failures are audited
+          with the error message.
+        </GuideStep>
+        <GuideStep n={6} title="Go fully live">
+          The pipeline runs automatically every weekday at 11:00 UTC (~6/7am NYC). Once real
+          records flow, purge the demo rows above — the Live badge in the top bar confirms
+          everything on screen is real.
+        </GuideStep>
+      </ol>
+    </Modal>
   );
 }
 
@@ -244,6 +333,7 @@ export function SettingsView() {
   const [apiUp, setApiUp] = useState<boolean | null>(serverSettings ? true : null);
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const probe = await probeSettings();
@@ -379,6 +469,7 @@ export function SettingsView() {
       {/* Data sources / connectors */}
       <Section
         title="Data sources"
+        onHelp={() => setGuideOpen(true)}
         sub="One connector per source. Government recorder and permit portals rarely offer APIs — set those to Scrape: a Cloudflare headless browser renders the page on schedule and the AI pipeline extracts clean records from it. Vendor keys are encrypted at rest (AES-GCM)."
       >
         {connectors ? (
@@ -406,6 +497,7 @@ export function SettingsView() {
       {/* AI pipeline */}
       <Section
         title="AI pipeline"
+        onHelp={() => setGuideOpen(true)}
         sub="Workers AI analyzes scraped pages into structured records, enriches entities, and writes borrower briefs. Requests route through your Cloudflare AI Gateway for centralized billing, caching and logs."
       >
         <div className="flex items-center gap-2 rounded-xl border border-line bg-raised/40 px-4 py-3">
@@ -447,6 +539,8 @@ export function SettingsView() {
           </button>
         </div>
       </Section>
+
+      <SetupGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
 
       {/* Markets */}
       <Section
