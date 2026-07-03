@@ -26,10 +26,15 @@ binding = "AI"
 [vars]
 ALLOWED_ORIGIN = "*"
 AI_MODEL = "@cf/moonshotai/kimi-k2.6"
-# CF_ACCOUNT_ID = "..."   # required for Browser Rendering (headless scraping)
+# CLOUDFLARE_ACCOUNT_ID is injected automatically by the deploy workflow
+# (--var from the CLOUDFLARE_ACCOUNT_ID GitHub secret) — used by Browser
+# Rendering (headless scraping). Only set it here for manual deploys.
 
-# Secrets (set via `wrangler secret put <NAME> --config worker/wrangler.toml`):
-#   ACCESS_CODE         - login code that unlocks the app; also the KEK for stored vendor keys
-#   CF_API_TOKEN        - Cloudflare API token with Browser Rendering permission (scraping)
-#   WEBHOOK_SECRET      - HMAC secret for inbound record webhooks
+# Secrets (the deploy workflow syncs CLOUDFLARE_API_TOKEN automatically from
+# the same-named GitHub secret; set the rest via
+# `wrangler secret put <NAME> --config worker/wrangler.toml`):
+#   ACCESS_CODE           - login code that unlocks the app; also the KEK for stored vendor keys
+#   CLOUDFLARE_API_TOKEN  - same token as CI; give it Browser Rendering: Edit for scraping
+#   RESEND_API_KEY        - email digests
+#   WEBHOOK_SECRET        - HMAC secret for inbound record webhooks
 #   COUNTY_API_KEY / PERMIT_API_KEY / SKIP_TRACE_API_KEY - optional env fallbacks for vendor keys

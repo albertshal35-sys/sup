@@ -264,16 +264,16 @@ export async function generateOutreach(
 /**
  * Fetch a rendered page as markdown via the Browser Rendering REST API —
  * a managed headless browser, so JS-heavy government portals render fully.
- * Requires CF_ACCOUNT_ID (var) + CF_API_TOKEN (secret w/ Browser Rendering).
+ * Requires CLOUDFLARE_ACCOUNT_ID (var) + CLOUDFLARE_API_TOKEN (secret w/ Browser Rendering).
  */
 export async function renderPageMarkdown(env: Env, url: string): Promise<string> {
-  if (!env.CF_ACCOUNT_ID || !env.CF_API_TOKEN) throw new Error("browser_rendering_not_configured");
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) throw new Error("browser_rendering_not_configured");
   const res = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/browser-rendering/markdown`,
+    `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/browser-rendering/markdown`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.CF_API_TOKEN}`,
+        Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

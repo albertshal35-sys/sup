@@ -44,7 +44,18 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy Worker (API + static assets)
-        run: npx wrangler deploy --config worker/wrangler.toml
+        # The account id is passed through as a runtime var so Browser
+        # Rendering (headless scraping) works without configuring it twice.
+        run: npx wrangler deploy --config worker/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Sync CLOUDFLARE_API_TOKEN Worker secret
+        # One token everywhere: the same CI token is pushed into the Worker
+        # so Browser Rendering can use it at runtime. Give the token
+        # Workers Scripts:Edit + D1:Edit + Browser Rendering:Edit.
+        run: printf '%s' "${{ secrets.CLOUDFLARE_API_TOKEN }}" | npx wrangler secret put CLOUDFLARE_API_TOKEN --config worker/wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

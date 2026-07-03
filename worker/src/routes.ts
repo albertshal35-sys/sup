@@ -99,7 +99,7 @@ route("GET", "/api/settings", async (_req, env) => {
       markets: parse(map.markets) ?? [],
       aiEnabled: aiAvailable(env),
       aiGatewayId: map.ai_gateway_id || "",
-      scrapingConfigured: Boolean(env.CF_ACCOUNT_ID && env.CF_API_TOKEN),
+      scrapingConfigured: Boolean(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN),
       alertsEnabled: map.alerts_enabled === "true",
       alertEmail: map.alert_email || "",
       alertsConfigured: Boolean(env.RESEND_API_KEY),
@@ -906,8 +906,9 @@ route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => 
         role: "system",
         content:
           "You map an open-data dataset's field names onto a target record shape. Given sample rows, return ONLY a JSON object: " +
-          '{"dateField": "<the dataset field to filter/order by date>", "map": {<targetField>: <datasetField or "=CONSTANT">}} ' +
+          '{"dateField": "<the dataset field to filter/order by date>", "where": <SoQL filter string or null>, "map": {<targetField>: <datasetField or "=CONSTANT">}} ' +
           "covering every target field you can. Use \"=NY\"-style constants for fixed values the dataset implies but does not carry. " +
+          'Use "where" to restrict multi-purpose datasets to the relevant records (e.g. "doc_type = \'MTGE\'"). ' +
           "Target shape:\n" + shape,
       },
       { role: "user", content: sample },

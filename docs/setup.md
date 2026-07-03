@@ -58,14 +58,11 @@ ships with the deploy. Default model: `@cf/moonshotai/kimi-k2.6`
 ### 2.3 Browser Rendering (headless scraping)
 
 Scrape-mode connectors render government portals with Cloudflare's managed
-headless Chrome. It's driven by REST, so it needs an API token:
-
-1. Dashboard → **My Profile → API Tokens** → *Create Token* → custom token
-   with the **Browser Rendering: Edit** permission.
-2. Store it as a Worker secret (section 4): `CF_API_TOKEN`.
-3. Set your account ID as a var (section 5): `CF_ACCOUNT_ID`.
-
-Without these two, scrape-mode connectors simply report
+headless Chrome. No separate credentials needed: it reuses the same `CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_ACCOUNT_ID` GitHub secrets that power deploys — the deploy
+workflow injects both into the Worker automatically on every deploy. Just
+make sure the token's permissions include **Browser Rendering: Edit**
+(section 3). Until then, scrape-mode connectors simply report
 `browser_rendering_not_configured` when run — nothing else breaks.
 
 ---
@@ -79,8 +76,13 @@ Actions):
 
 | Secret | Value |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token with **Workers Scripts: Edit** + **D1: Edit** |
+| `CLOUDFLARE_API_TOKEN` | One token for everything: **Workers Scripts: Edit** + **D1: Edit** + **Browser Rendering: Edit** |
 | `CLOUDFLARE_ACCOUNT_ID` | Your account ID (dashboard → Workers & Pages, right sidebar) |
+
+These two are the *only* place you configure Cloudflare credentials — the
+deploy workflow passes the account ID into the Worker as a runtime var and
+syncs the token in as a Worker secret, so scraping (Browser Rendering)
+works with no extra setup.
 
 Manual deploy alternative: `npm run deploy` (builds + `wrangler deploy`),
 `npm run db:migrate` (applies pending migrations remotely).
@@ -98,7 +100,6 @@ npx wrangler secret put <NAME> --config worker/wrangler.toml
 | Secret | Required? | Purpose |
 | --- | --- | --- |
 | `ACCESS_CODE` | **Yes — set this first** | The login code that unlocks the app. Until it exists, the app is open (first-run safety), so set it immediately after the first deploy. It is also the encryption key (KEK) for vendor API keys stored in Settings — **changing it invalidates stored vendor keys**, which you'd re-enter in Settings. |
-| `CF_API_TOKEN` | For scraping | Browser Rendering permission (section 2.3). |
 | `RESEND_API_KEY` | For email digests | From [resend.com](https://resend.com) (free tier is fine). Powers the daily digest and Settings → "Send test". |
 | `WEBHOOK_SECRET` | Optional | HMAC-SHA256 secret if a vendor pushes records to `POST /api/webhooks/records` between scheduled runs. |
 | `COUNTY_API_KEY` / `PERMIT_API_KEY` / `SKIP_TRACE_API_KEY` | Optional | Env fallbacks for vendor keys. Normally you paste keys in Settings instead (encrypted at rest with the `ACCESS_CODE`). |
@@ -111,7 +112,7 @@ npx wrangler secret put <NAME> --config worker/wrangler.toml
 | --- | --- | --- |
 | `ALLOWED_ORIGIN` | `*` | CORS. Single-Worker deploys can leave `*`; tighten to your domain if you like. |
 | `AI_MODEL` | `@cf/moonshotai/kimi-k2.6` | Workers AI model for all extraction/generation. |
-| `CF_ACCOUNT_ID` | *(unset)* | **Uncomment and set** — required for Browser Rendering. Same account ID as section 3. |
+| `CLOUDFLARE_ACCOUNT_ID` | *(auto)* | Injected by the deploy workflow from the GitHub secret — only set it in `wrangler.toml` for manual `npm run deploy` runs. |
 | `ALERT_FROM` | *(unset)* | Optional From address for digests, e.g. `LienWolf <alerts@yourdomain.com>`. The domain must be verified in Resend; otherwise the Resend onboarding sender is used. |
 
 Vars ship with each deploy — after editing, push to `main` (or `npm run deploy`).
@@ -156,17 +157,26 @@ the URL shape and switches to its Socrata adapter automatically. Then:
    and paste it as the connector's API key to avoid throttling.
 3. Enable the connector and hit **Run now** to test.
 
-Suggested datasets (also listed on each connector card in-app):
+Connectors come **pre-filled with real endpoints** (seeded by migration
+0006 — your edits are never overwritten); verify, auto-map, and enable:
 
-| Connector | NYC Open Data dataset |
-| --- | --- |
-| County deeds | ACRIS Real Property Master + Legals + Parties |
-| County loans | Same ACRIS datasets, doc type `MTGE`/`AGMT` |
-| Permits | DOB NOW: Build Job Application Filings; DOB Permit Issuance |
-| Violations | DOB Violations; ECB Violations; HPD Violations |
-| Tax liens | DOF Tax Lien Sale lists |
-| Satisfactions | ACRIS, doc type `SAT` |
-| Corp registry | data.ny.gov Active Corporations |
+| Connector | Seeded endpoint | Dataset |
+| --- | --- | --- |
+| Permits | `data.cityofnewyork.us/resource/w9ak-ipjd.json` | DOB NOW: Build — Job Application Filings |
+| Violations | `data.cityofnewyork.us/resource/6bgk-3dad.json` | DOB ECB Violations (respondent + penalty) |
+| Tax liens | `data.cityofnewyork.us/resource/9rz4-mjek.json` | DOF Tax Lien Sale Lists |
+| Corp registry | `data.ny.gov/resource/n9v6-gdp6.json` | NYS Active Corporations |
+| Deeds / loans / satisfactions | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | ACRIS Real Property Master — see caveat below |
+
+**ACRIS caveat:** the Master dataset carries document type, amount and date,
+but party *names* live in ACRIS Parties (`636b-3b5g`) and property
+*addresses* in ACRIS Legals (`8h5j-fqxa`), joined by `document_id`. Until
+you use a joined feed or scrape the ACRIS search UI, master-only rows lack
+names/addresses and will quarantine rather than pollute your data. Filter
+document types with the field-map's `where` (e.g. `doc_type = 'MTGE'`).
+Scrape-mode connectors (lis pendens, auctions, UCC, borough liens) are
+seeded with the relevant portal URLs — swap in the results page for your
+borough/search.
 
 ACRIS covers Manhattan/Brooklyn/Queens/Bronx; Staten Island (Richmond
 County) records live with the Richmond County Clerk → use scrape mode.
@@ -183,7 +193,7 @@ calendars, NY DOS UCC search, Richmond County Clerk):
 2. Use the **notes** box to tell the AI normalizer what to look for
    (document types, date filters, county quirks) — the notes are injected
    into the extraction prompt.
-3. Requires `CF_API_TOKEN` + `CF_ACCOUNT_ID` (section 2.3).
+3. Requires the Browser Rendering permission on your `CLOUDFLARE_API_TOKEN` (section 2.3).
 
 Scraped records pass an extra **AI grounding check**: values that can't be
 shown in the rendered page are quarantined, never ingested.
@@ -251,7 +261,7 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Symptom | Likely cause |
 | --- | --- |
 | Login page never appears | `ACCESS_CODE` secret not set — app stays open by design until it exists |
-| Scrape connector fails `browser_rendering_not_configured` | Missing `CF_API_TOKEN` secret or `CF_ACCOUNT_ID` var |
+| Scrape connector fails `browser_rendering_not_configured` | Token lacks Browser Rendering permission, or no deploy has run since the workflow gained the secret-sync step |
 | Socrata connector fails `field_map_missing` | Run *Auto-map with AI* (or paste a mapping) before enabling |
 | "Send test" digest fails | `RESEND_API_KEY` not set, or `ALERT_FROM` domain not verified in Resend |
 | AI buttons return `ai_not_configured` | Worker deployed without the `[ai]` binding — redeploy from this repo's `wrangler.toml` |
