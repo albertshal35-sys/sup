@@ -130,7 +130,7 @@ export const useApp = create<AppState>()(
       view: "dashboard",
       mobileNavOpen: false,
       collapsed: false,
-      theme: "dark",
+      theme: "light",
       loading: true,
       paletteOpen: false,
       dataMode: "offline",
