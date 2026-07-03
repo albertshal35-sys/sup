@@ -123,6 +123,15 @@ function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollap
 
       {/* Footer */}
       <div className="flex flex-col gap-1 px-2 pb-4">
+        {expanded && (
+          <div className="mb-1 rounded-xl border border-line bg-raised/60 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-2xs text-tx2">
+              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-ok" />
+              Pipeline healthy
+            </div>
+            <div className="mt-0.5 text-2xs text-tx3">Next pull · weekdays 11:00 UTC</div>
+          </div>
+        )}
         <button
           onClick={() => setView("settings")}
           title="Settings"
@@ -154,15 +163,6 @@ function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollap
           </button>
         )}
 
-        {expanded && (
-          <div className="mt-2 rounded-xl border border-line bg-raised/60 px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-2xs text-tx2">
-              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-ok" />
-              Pipeline healthy
-            </div>
-            <div className="mt-0.5 text-2xs text-tx3">Next pull · weekdays 11:00 UTC</div>
-          </div>
-        )}
       </div>
     </div>
   );

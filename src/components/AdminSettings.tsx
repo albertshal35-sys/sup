@@ -1,16 +1,17 @@
 /**
- * Admin settings — data-source mode (sample vs live), vendor API
- * integrations for every connector, coverage markets and pipeline ops.
- * All mutating calls hit /api/admin/* with a bearer token.
+ * Settings — data source mode, per-connector ingestion setup (vendor API
+ * or headless-browser scraping), AI pipeline, coverage markets.
+ * Authentication is the app-wide access code; no separate admin token.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { useApp } from "../store";
-import { admin, getPublicSettings } from "../lib/api";
+import { admin, probeSettings } from "../lib/api";
 import type { ConnectorInfo } from "../types";
 import { ago, classNames } from "../lib/format";
-import { Toggle, TextField } from "./ui";
-import { IconAlert, IconCheck, IconPulse, IconX } from "./icons";
+import { Toggle, TextField, TextArea, Select } from "./ui";
+import { IconAlert, IconPulse, IconX } from "./icons";
+import { Sparkles } from "lucide-react";
 
 function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
@@ -34,23 +35,50 @@ function StatusPill({ status }: { status: string }) {
   return <span className={classNames("text-2xs font-medium capitalize", tone)}>{status}</span>;
 }
 
-function ConnectorCard({
-  connector,
-  token,
-  onChanged,
-}: {
-  connector: ConnectorInfo;
-  token: string;
-  onChanged: () => void;
-}) {
+/** Known public sources worth scraping per connector — starting points. */
+const SUGGESTED_SOURCES: Record<string, string[]> = {
+  county_deeds: [
+    "Maricopa County Recorder — recorder.maricopa.gov/recdocdata",
+    "Travis County Clerk — countyclerk.traviscountytx.gov (Official Public Records search)",
+    "Miami-Dade Clerk — onlineservices.miamidadeclerk.gov/officialrecords",
+    "Hillsborough ORI — pubrec.hillsclerk.com",
+  ],
+  county_loans: [
+    "Same recorder portals as deeds — search document type: DEED OF TRUST / MORTGAGE",
+    "API alternative: ATTOM, DataTree, or PropertyRadar vendor feeds",
+  ],
+  permits: [
+    "Phoenix — apps-secure.phoenix.gov/PDD/Search (Accela)",
+    "Austin — abc.austintexas.gov/web/permit/public-search-other",
+    "Miami-Dade — miamidade.gov/permits (Regulatory & Economic Resources)",
+    "API alternative: Shovels.ai permit API",
+  ],
+  liens: [
+    "Recorder portals above — document type: MECHANICS LIEN / CLAIM OF LIEN / LIS PENDENS",
+  ],
+  skip_trace: [
+    "Apollo.io (api.apollo.io) — people/organization match",
+    "Alternatives: BatchSkipTracing, Clearbit, PeopleDataLabs",
+  ],
+};
+
+const MODE_OPTIONS = [
+  { value: "scrape" as const, label: "Scrape (headless browser + AI)", hint: "for gov portals" },
+  { value: "api" as const, label: "Vendor API", hint: "normalized JSON feed" },
+];
+
+function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onChanged: () => void }) {
   const [baseUrl, setBaseUrl] = useState(connector.baseUrl ?? "");
+  const [scrapeUrl, setScrapeUrl] = useState(connector.scrapeUrl ?? "");
+  const [notes, setNotes] = useState(connector.notes ?? "");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const scrape = connector.mode === "scrape";
 
-  const save = async (patch: { enabled?: boolean; baseUrl?: string; apiKey?: string }) => {
+  const save = async (patch: Parameters<typeof admin.saveConnector>[1]) => {
     setBusy(true);
-    const res = await admin.saveConnector(token, connector.id, patch);
+    const res = await admin.saveConnector(connector.id, patch);
     setNote(res.ok ? "Saved" : `Error: ${res.error}`);
     setBusy(false);
     if (res.ok) {
@@ -62,7 +90,7 @@ function ConnectorCard({
 
   const run = async () => {
     setBusy(true);
-    const res = await admin.runConnector(token, connector.id);
+    const res = await admin.runConnector(connector.id);
     setNote(res.ok ? "Run started" : `Error: ${res.error}`);
     setBusy(false);
     setTimeout(() => {
@@ -99,19 +127,45 @@ function ConnectorCard({
         />
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[240px_1fr]">
         <div className="flex flex-col gap-1">
-          <span className="text-2xs font-medium text-tx3">Vendor base URL</span>
-          <TextField
-            value={baseUrl}
-            onChange={setBaseUrl}
-            onBlur={() => {
-              if (baseUrl !== (connector.baseUrl ?? "")) void save({ baseUrl });
-            }}
-            placeholder="https://api.vendor.com/v2"
+          <span className="text-2xs font-medium text-tx3">Source type</span>
+          <Select
+            size="sm"
+            value={connector.mode}
+            options={connector.id === "skip_trace" ? MODE_OPTIONS.slice(1) : MODE_OPTIONS}
+            onChange={(mode) => void save({ mode })}
           />
         </div>
-        <div className="flex flex-col gap-1">
+        {scrape ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-2xs font-medium text-tx3">Portal URL to scrape</span>
+            <TextField
+              value={scrapeUrl}
+              onChange={setScrapeUrl}
+              onBlur={() => {
+                if (scrapeUrl !== (connector.scrapeUrl ?? "")) void save({ scrapeUrl });
+              }}
+              placeholder="https://recorder.maricopa.gov/recdocdata/…"
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <span className="text-2xs font-medium text-tx3">Vendor base URL</span>
+            <TextField
+              value={baseUrl}
+              onChange={setBaseUrl}
+              onBlur={() => {
+                if (baseUrl !== (connector.baseUrl ?? "")) void save({ baseUrl });
+              }}
+              placeholder="https://api.vendor.com/v2"
+            />
+          </div>
+        )}
+      </div>
+
+      {!scrape && (
+        <div className="mt-2 flex flex-col gap-1">
           <span className="text-2xs font-medium text-tx3">
             API key{" "}
             {connector.apiKeyLast4 && (
@@ -134,7 +188,34 @@ function ConnectorCard({
             </button>
           </div>
         </div>
+      )}
+
+      <div className="mt-2 flex flex-col gap-1">
+        <span className="text-2xs font-medium text-tx3">
+          Notes for the pipeline{scrape && " (fed to the AI normalizer)"}
+        </span>
+        <TextArea
+          value={notes}
+          onChange={setNotes}
+          onBlur={() => {
+            if (notes !== (connector.notes ?? "")) void save({ notes });
+          }}
+          placeholder="Anything this source needs: search filters to apply, county quirks, document types, login hints…"
+        />
       </div>
+
+      {SUGGESTED_SOURCES[connector.id] && (
+        <div className="mt-2 rounded-lg border border-dashed border-line px-3 py-2">
+          <div className="text-2xs font-medium text-tx3">Suggested sources</div>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {SUGGESTED_SOURCES[connector.id].map((s) => (
+              <li key={s} className="text-2xs text-tx3">
+                · {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5">
         <span className="text-2xs text-tx3">Runs weekdays 11:00 UTC · 3 retries · audited</span>
@@ -151,36 +232,28 @@ function ConnectorCard({
 }
 
 export function SettingsView() {
-  const adminToken = useApp((s) => s.adminToken);
-  const setAdminToken = useApp((s) => s.setAdminToken);
   const dataMode = useApp((s) => s.dataMode);
   const setDataMode = useApp((s) => s.setDataMode);
+  const serverSettings = useApp((s) => s.serverSettings);
   const loadAll = useApp((s) => s.loadAll);
 
-  const [tokenDraft, setTokenDraft] = useState(adminToken);
   const [connectors, setConnectors] = useState<ConnectorInfo[] | null>(null);
-  const [markets, setMarkets] = useState<string[]>([]);
+  const [markets, setMarkets] = useState<string[]>(serverSettings?.markets ?? []);
   const [newMarket, setNewMarket] = useState("");
-  const [apiUp, setApiUp] = useState<boolean | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [gatewayId, setGatewayId] = useState(serverSettings?.aiGatewayId ?? "");
+  const [apiUp, setApiUp] = useState<boolean | null>(serverSettings ? true : null);
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const pub = await getPublicSettings();
-    setApiUp(pub != null);
-    if (pub) setMarkets(pub.markets);
-    if (pub && adminToken) {
-      const res = await admin.getConnectors(adminToken);
-      if (res.ok) {
-        setConnectors(res.data.connectors);
-        setAuthError(null);
-      } else {
-        setConnectors(null);
-        setAuthError(res.error === "unauthorized" ? "Token rejected" : res.error);
-      }
-    }
-  }, [adminToken]);
+    const probe = await probeSettings();
+    setApiUp(probe.status === "ok");
+    if (probe.status !== "ok") return;
+    setMarkets(probe.settings.markets);
+    setGatewayId(probe.settings.aiGatewayId);
+    const res = await admin.getConnectors();
+    setConnectors(res.ok ? res.data.connectors : null);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -193,7 +266,7 @@ export function SettingsView() {
 
   const switchMode = async (live: boolean) => {
     const target = live ? "live" : "demo";
-    const res = await admin.saveSettings(adminToken, { dataMode: target });
+    const res = await admin.saveSettings({ dataMode: target });
     if (res.ok) {
       setDataMode(target);
       flash(target === "live" ? "Live mode on — feeds now show only real records." : "Demo mode on.");
@@ -209,7 +282,7 @@ export function SettingsView() {
       setTimeout(() => setPurgeArmed(false), 4000);
       return;
     }
-    const res = await admin.purgeDemo(adminToken);
+    const res = await admin.purgeDemo();
     setPurgeArmed(false);
     flash(res.ok ? `Purged ${res.data.deleted} sample rows.` : `Purge failed: ${res.error}`);
     void loadAll();
@@ -219,7 +292,7 @@ export function SettingsView() {
     const m = newMarket.trim();
     if (!m || markets.includes(m)) return;
     const next = [...markets, m];
-    const res = await admin.saveSettings(adminToken, { markets: next });
+    const res = await admin.saveSettings({ markets: next });
     if (res.ok) {
       setMarkets(next);
       setNewMarket("");
@@ -228,7 +301,7 @@ export function SettingsView() {
 
   const removeMarket = async (m: string) => {
     const next = markets.filter((x) => x !== m);
-    const res = await admin.saveSettings(adminToken, { markets: next });
+    const res = await admin.saveSettings({ markets: next });
     if (res.ok) setMarkets(next);
   };
 
@@ -247,48 +320,15 @@ export function SettingsView() {
           <IconAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             The Worker API is not reachable, so the app is running on bundled sample data. Deploy
-            the Worker (<code className="font-mono">npm run deploy</code>) to manage live
-            integrations from here.
+            it (<code className="font-mono">npm run deploy</code>) to manage live data sources here.
           </span>
         </div>
       )}
 
-      {/* Admin access */}
-      <Section
-        title="Administrator access"
-        sub="Admin actions authenticate with the ADMIN_TOKEN secret set on the Worker (wrangler secret put ADMIN_TOKEN). The token is stored only in this browser."
-      >
-        <div className="flex max-w-md gap-2">
-          <TextField
-            type="password"
-            value={tokenDraft}
-            onChange={setTokenDraft}
-            placeholder="Paste admin token…"
-            disabled={offline}
-          />
-          <button
-            onClick={() => {
-              setAdminToken(tokenDraft);
-              flash("Admin token saved.");
-            }}
-            disabled={offline || tokenDraft === adminToken}
-            className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
-          >
-            Save
-          </button>
-        </div>
-        {authError && <p className="mt-2 text-2xs text-danger">{authError}</p>}
-        {!offline && adminToken && !authError && connectors && (
-          <p className="mt-2 flex items-center gap-1.5 text-2xs text-ok">
-            <IconCheck className="h-3 w-3" /> Authenticated
-          </p>
-        )}
-      </Section>
-
       {/* Data source */}
       <Section
         title="Data source"
-        sub="Demo mode shows the bundled sample dataset so the product is always explorable. Live mode shows only real records ingested from your connected APIs — sample rows disappear from every feed and KPI."
+        sub="Live mode (default) shows only real records ingested from your configured sources. Demo mode overlays the bundled sample dataset for exploring the product."
       >
         <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-raised/40 px-4 py-3">
           <div>
@@ -297,7 +337,7 @@ export function SettingsView() {
             </div>
             <div className="text-2xs text-tx3">
               {dataMode === "live"
-                ? "Feeds reflect records pulled by the daily pipeline."
+                ? "Feeds reflect records pulled by the scheduled pipeline."
                 : "Feeds include seeded demo borrowers and signals."}
             </div>
           </div>
@@ -307,7 +347,7 @@ export function SettingsView() {
             </span>
             <Toggle
               checked={dataMode === "live"}
-              disabled={offline || !adminToken}
+              disabled={offline}
               label="Live data"
               onChange={(v) => void switchMode(v)}
             />
@@ -318,12 +358,12 @@ export function SettingsView() {
         </div>
         <div className="mt-2.5 flex items-center justify-between gap-3">
           <p className="text-2xs text-tx3">
-            Permanently delete the seeded sample rows from the database (entities, signals, deeds,
-            loans, permits, liens). Your saved pipeline is not affected.
+            Permanently delete the seeded sample rows (entities, signals, deeds, loans, permits,
+            liens). Your saved pipeline is not affected.
           </p>
           <button
             onClick={() => void purge()}
-            disabled={offline || !adminToken}
+            disabled={offline}
             className={classNames(
               "shrink-0 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
               purgeArmed
@@ -336,19 +376,19 @@ export function SettingsView() {
         </div>
       </Section>
 
-      {/* Integrations */}
+      {/* Data sources / connectors */}
       <Section
-        title="API integrations"
-        sub="One connector per source. Keys are encrypted at rest in D1 (AES-GCM) and only decrypted inside the Worker at run time. The pipeline pulls every weekday at 11:00 UTC; each connector retries 3× and writes an audit row."
+        title="Data sources"
+        sub="One connector per source. Government recorder and permit portals rarely offer APIs — set those to Scrape: a Cloudflare headless browser renders the page on schedule and the AI pipeline extracts clean records from it. Vendor keys are encrypted at rest (AES-GCM)."
       >
         {connectors ? (
           <div className="flex flex-col gap-2.5">
             {connectors.map((c) => (
-              <ConnectorCard key={c.id} connector={c} token={adminToken} onChanged={() => void refresh()} />
+              <ConnectorCard key={c.id} connector={c} onChanged={() => void refresh()} />
             ))}
             <button
               onClick={async () => {
-                const res = await admin.runAll(adminToken);
+                const res = await admin.runAll();
                 flash(res.ok ? "Full pipeline run started." : `Error: ${res.error}`);
               }}
               className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-line py-2.5 text-xs font-medium text-tx2 transition-colors hover:border-accent/40 hover:text-accent"
@@ -358,19 +398,60 @@ export function SettingsView() {
           </div>
         ) : (
           <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-xs text-tx3">
-            {offline
-              ? "Connector management requires the deployed Worker."
-              : adminToken
-                ? "Loading connectors…"
-                : "Save an admin token above to manage integrations."}
+            {offline ? "Connector management requires the deployed Worker." : "Loading connectors…"}
           </p>
         )}
+      </Section>
+
+      {/* AI pipeline */}
+      <Section
+        title="AI pipeline"
+        sub="Workers AI analyzes scraped pages into structured records, enriches entities, and writes borrower briefs. Requests route through your Cloudflare AI Gateway for centralized billing, caching and logs."
+      >
+        <div className="flex items-center gap-2 rounded-xl border border-line bg-raised/40 px-4 py-3">
+          <Sparkles strokeWidth={1.75} className="h-4 w-4 shrink-0 text-violet" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-tx1">
+              Model: <span className="font-mono text-2xs">@cf/moonshotai/kimi-k2.6</span>
+            </div>
+            <div className="text-2xs text-tx3">
+              {serverSettings?.aiEnabled
+                ? "Workers AI binding active."
+                : "Deploy the Worker to activate the AI binding."}
+              {serverSettings && !serverSettings.scrapingConfigured && (
+                <> Scraping needs CF_ACCOUNT_ID + CF_API_TOKEN (Browser Rendering) on the Worker.</>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2.5 flex max-w-md items-end gap-2">
+          <div className="flex-1">
+            <span className="text-2xs font-medium text-tx3">AI Gateway ID</span>
+            <TextField
+              value={gatewayId}
+              onChange={setGatewayId}
+              placeholder="my-gateway"
+              disabled={offline}
+              className="mt-1"
+            />
+          </div>
+          <button
+            disabled={offline}
+            onClick={async () => {
+              const res = await admin.saveSettings({ aiGatewayId: gatewayId });
+              flash(res.ok ? "AI Gateway saved." : `Error: ${res.error}`);
+            }}
+            className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
       </Section>
 
       {/* Markets */}
       <Section
         title="Coverage markets"
-        sub="Counties requested from every connector on each run. Add markets as your vendor contracts expand."
+        sub="Counties requested from every source on each run. Add markets as your coverage expands."
       >
         <div className="flex flex-wrap items-center gap-1.5">
           {markets.map((m) => (
@@ -381,7 +462,7 @@ export function SettingsView() {
               {m}
               <button
                 onClick={() => void removeMarket(m)}
-                disabled={offline || !adminToken}
+                disabled={offline}
                 aria-label={`Remove ${m}`}
                 className="rounded p-0.5 opacity-50 hover:opacity-100 disabled:hidden"
               >
@@ -394,12 +475,12 @@ export function SettingsView() {
               value={newMarket}
               onChange={setNewMarket}
               placeholder="County, ST"
-              disabled={offline || !adminToken}
+              disabled={offline}
               className="w-32"
             />
             <button
               onClick={() => void addMarket()}
-              disabled={offline || !adminToken || !newMarket.trim()}
+              disabled={offline || !newMarket.trim()}
               className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-tx2 transition-colors hover:text-tx1 disabled:opacity-40"
             >
               Add

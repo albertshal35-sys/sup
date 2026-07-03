@@ -14,6 +14,66 @@ import {
 import { UrgencyPill } from "./primitives";
 import { DatePicker, TextField } from "./ui";
 import { IconChevronRight, IconPulse } from "./icons";
+import { fetchAiBrief } from "../lib/api";
+import { Sparkles } from "lucide-react";
+
+/* --------------------------- AI brief --------------------------- */
+/* One click: kimi-k2.6 (via AI Gateway) synthesizes every signal, the
+   36-month history and cost of capital into an outreach brief. */
+
+function AiBrief({ entityId }: { entityId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [brief, setBrief] = useState("");
+
+  useEffect(() => {
+    setState("idle");
+    setBrief("");
+  }, [entityId]);
+
+  const generate = async () => {
+    setState("loading");
+    const res = await fetchAiBrief(entityId);
+    if ("brief" in res) {
+      setBrief(res.brief);
+      setState("done");
+    } else {
+      setBrief(
+        res.error === "ai_not_configured" || res.error === "offline"
+          ? "AI briefs activate once the Worker is deployed with the Workers AI binding."
+          : "Brief generation failed — try again in a moment."
+      );
+      setState("error");
+    }
+  };
+
+  return (
+    <section className="mt-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-2xs font-medium text-tx3">AI Outreach Brief</h3>
+        <button
+          onClick={() => void generate()}
+          disabled={state === "loading"}
+          className="flex items-center gap-1.5 rounded-lg border border-violet/30 bg-violet/10 px-2.5 py-1 text-2xs font-medium text-violet transition-colors hover:bg-violet/20 disabled:opacity-50"
+        >
+          <Sparkles strokeWidth={1.75} className="h-3 w-3" />
+          {state === "loading" ? "Analyzing…" : state === "done" ? "Regenerate" : "Generate"}
+        </button>
+      </div>
+      {state !== "idle" && (
+        <p
+          className={classNames(
+            "mt-2 whitespace-pre-wrap rounded-xl border px-3.5 py-3 text-xs leading-relaxed",
+            state === "error"
+              ? "border-line bg-raised/60 text-tx3"
+              : "border-violet/20 bg-violet/[0.05] text-tx2"
+          )}
+        >
+          {state === "loading" ? "Reading signals, history and cost of capital…" : brief}
+        </p>
+      )}
+    </section>
+  );
+}
 
 /* ------------------------- CRM panel ------------------------- */
 
@@ -280,9 +340,8 @@ function VelocityRing({ score }: { score: number }) {
           strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)} className={tone}
         />
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="font-display text-base font-bold tabular-nums text-tx1">{score}</span>
-        <span className="text-[9px] text-tx3">velocity</span>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="font-display text-xl font-bold tabular-nums text-tx1">{score}</span>
       </div>
     </div>
   );
@@ -410,6 +469,8 @@ export function BorrowerResumeModal() {
           </div>
 
           <CrmPanel entityId={e.id} entityName={e.name} />
+
+          <AiBrief entityId={e.id} />
 
           <NetworkSection network={resume.network} />
 

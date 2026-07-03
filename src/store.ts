@@ -14,12 +14,15 @@ import {
   getFeed,
   getIngestionStatus,
   getKpis,
-  getPublicSettings,
   getResume,
+  loginWithCode,
+  probeSettings,
+  setSessionToken,
   setTriggerStatus,
   syncLeadRemove,
   syncLeadUpsert,
 } from "./lib/api";
+import type { PublicSettings } from "./types";
 
 export type View =
   | "dashboard"
@@ -32,6 +35,7 @@ export type View =
 
 export type Theme = "dark" | "light";
 export type DataMode = "demo" | "live" | "offline";
+export type AuthState = "checking" | "locked" | "open";
 
 interface AppState {
   view: View;
@@ -41,7 +45,10 @@ interface AppState {
   loading: boolean;
   paletteOpen: boolean; // ⌘K command palette
   dataMode: DataMode; // resolved from /api/settings on load
-  adminToken: string; // bearer for /api/admin/* (persisted)
+  session: string; // signed session token from access-code login (persisted)
+  auth: AuthState; // gate state: checking → locked (login page) | open
+  loginError: string | null;
+  serverSettings: PublicSettings | null;
 
   kpis: Kpis | null;
   feeds: Record<TriggerKind, TriggerItem[]>;
@@ -60,7 +67,8 @@ interface AppState {
   toggleTheme: () => void;
   setPalette: (open: boolean) => void;
   setDataMode: (m: DataMode) => void;
-  setAdminToken: (t: string) => void;
+  login: (code: string) => Promise<void>;
+  logout: () => void;
   loadAll: () => Promise<void>;
   openResume: (entityId: string, fromItem?: TriggerItem) => Promise<void>;
   closeResume: () => void;
@@ -122,7 +130,10 @@ export const useApp = create<AppState>()(
       loading: true,
       paletteOpen: false,
       dataMode: "offline",
-      adminToken: "",
+      session: "",
+      auth: "checking",
+      loginError: null,
+      serverSettings: null,
 
       kpis: null,
       feeds: emptyFeeds,
@@ -144,14 +155,41 @@ export const useApp = create<AppState>()(
       },
       setPalette: (paletteOpen) => set({ paletteOpen }),
       setDataMode: (dataMode) => set({ dataMode }),
-      setAdminToken: (adminToken) => set({ adminToken }),
+
+      login: async (code) => {
+        set({ loginError: null });
+        const res = await loginWithCode(code);
+        if (!res.ok) {
+          set({
+            loginError:
+              res.error === "invalid_code"
+                ? "That code isn't right — check with your administrator."
+                : "Can't reach the server. Try again in a moment.",
+          });
+          return;
+        }
+        setSessionToken(res.token);
+        set({ session: res.token, auth: "open" });
+        void get().loadAll();
+      },
+
+      logout: () => {
+        setSessionToken("");
+        set({ session: "", auth: "locked", kpis: null, feeds: emptyFeeds });
+      },
 
       loadAll: async () => {
         set({ loading: true });
-        // Resolve data mode first: live/demo when the Worker answers,
-        // offline (bundled demo data) when it does not.
-        const settings = await getPublicSettings();
+        setSessionToken(get().session);
+        // Probe the API: offline → bundled demo, 401 → login page, ok → data.
+        const probe = await probeSettings();
+        if (probe.status === "unauthorized") {
+          set({ auth: "locked", loading: false });
+          return;
+        }
+        const settings = probe.status === "ok" ? probe.settings : null;
         const mode: DataMode = settings?.dataMode ?? "offline";
+        set({ auth: "open", serverSettings: settings });
         const [kpis, maturity, cashPoor, permit, lien, ingestion] = await Promise.all([
           getKpis(mode),
           getFeed("maturity", mode),
@@ -252,23 +290,25 @@ export const useApp = create<AppState>()(
     }),
     {
       name: "lienwolf-ui",
-      version: 1,
+      version: 2,
       partialize: (s) => ({
         pipeline: s.pipeline,
         dismissed: s.dismissed,
         collapsed: s.collapsed,
         theme: s.theme,
-        adminToken: s.adminToken,
+        session: s.session,
       }),
       migrate: (persisted, version) => {
-        // v0 stored `watchlist: string[]` — promote to full pipeline leads.
         const state = persisted as Record<string, unknown>;
+        // v0 stored `watchlist: string[]` — promote to full pipeline leads.
         if (version === 0 && Array.isArray(state.watchlist)) {
           state.pipeline = Object.fromEntries(
             (state.watchlist as string[]).map((id) => [id, newLead(id, id)])
           );
           delete state.watchlist;
         }
+        // v1 stored a separate adminToken — superseded by the login session.
+        if (version <= 1) delete state.adminToken;
         return state as never;
       },
       onRehydrateStorage: () => (state) => {

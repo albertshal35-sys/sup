@@ -25,18 +25,80 @@ import {
   synthesizeResume,
 } from "../data/mock";
 
-const TIMEOUT_MS = 3_000;
+const TIMEOUT_MS = 4_000;
+
+/** Session token set after login; attached to every API call. */
+let sessionToken = "";
+export function setSessionToken(t: string) {
+  sessionToken = t;
+}
+
+function authHeaders(): Record<string, string> {
+  return sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
+}
 
 async function tryFetch<T>(path: string): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    const res = await fetch(`/api${path}`, { signal: controller.signal });
+    const res = await fetch(`/api${path}`, { signal: controller.signal, headers: authHeaders() });
     clearTimeout(timer);
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
     return null;
+  }
+}
+
+/* ------------------------------- auth ------------------------------- */
+
+export type SettingsProbe =
+  | { status: "ok"; settings: PublicSettings }
+  | { status: "unauthorized" }
+  | { status: "offline" };
+
+/** Probe /api/settings distinguishing offline vs locked vs open. */
+export async function probeSettings(): Promise<SettingsProbe> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const res = await fetch("/api/settings", { signal: controller.signal, headers: authHeaders() });
+    clearTimeout(timer);
+    if (res.status === 401) return { status: "unauthorized" };
+    if (!res.ok) return { status: "offline" };
+    return { status: "ok", settings: (await res.json()) as PublicSettings };
+  } catch {
+    return { status: "offline" };
+  }
+}
+
+export async function loginWithCode(
+  code: string
+): Promise<{ ok: true; token: string } | { ok: false; error: "invalid_code" | "offline" }> {
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (res.status === 401) return { ok: false, error: "invalid_code" };
+    if (!res.ok) return { ok: false, error: "offline" };
+    const body = (await res.json()) as { token: string };
+    return { ok: true, token: body.token };
+  } catch {
+    return { ok: false, error: "offline" };
+  }
+}
+
+/** AI outreach brief, generated server-side from the borrower's records. */
+export async function fetchAiBrief(entityId: string): Promise<{ brief: string } | { error: string }> {
+  try {
+    const res = await fetch(`/api/ai/brief/${entityId}`, { method: "POST", headers: authHeaders() });
+    const body = (await res.json().catch(() => ({}))) as { brief?: string; error?: string };
+    if (!res.ok || !body.brief) return { error: body.error ?? "ai_unavailable" };
+    return { brief: body.brief };
+  } catch {
+    return { error: "offline" };
   }
 }
 
@@ -94,7 +156,8 @@ type Mode = "demo" | "live" | "offline";
 
 /** Public app settings from the Worker; null when unreachable (offline demo). */
 export async function getPublicSettings(): Promise<PublicSettings | null> {
-  return tryFetch<PublicSettings>("/settings");
+  const probe = await probeSettings();
+  return probe.status === "ok" ? probe.settings : null;
 }
 
 export async function getFeed(kind: TriggerKind, mode: Mode = "offline"): Promise<TriggerItem[]> {
@@ -155,7 +218,7 @@ export async function syncLeadUpsert(lead: Lead): Promise<void> {
   try {
     await fetch("/api/watchlist", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({
         userId: DEMO_USER,
         entityId: lead.entityId,
@@ -172,7 +235,10 @@ export async function syncLeadUpsert(lead: Lead): Promise<void> {
 
 export async function syncLeadRemove(entityId: string): Promise<void> {
   try {
-    await fetch(`/api/watchlist/${entityId}?userId=${DEMO_USER}`, { method: "DELETE" });
+    await fetch(`/api/watchlist/${entityId}?userId=${DEMO_USER}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
   } catch {
     /* offline demo */
   }
@@ -182,7 +248,7 @@ export async function setTriggerStatus(id: string, status: string): Promise<void
   try {
     await fetch(`/api/triggers/${id}/status`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ status }),
     });
   } catch {
@@ -194,7 +260,6 @@ export async function setTriggerStatus(id: string, status: string): Promise<void
 
 async function adminFetch<T>(
   path: string,
-  token: string,
   init?: RequestInit
 ): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   try {
@@ -202,7 +267,7 @@ async function adminFetch<T>(
       ...init,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...authHeaders(),
         ...init?.headers,
       },
     });
@@ -215,25 +280,28 @@ async function adminFetch<T>(
 }
 
 export const admin = {
-  getConnectors: (token: string) =>
-    adminFetch<{ connectors: ConnectorInfo[] }>("/connectors", token),
+  getConnectors: () => adminFetch<{ connectors: ConnectorInfo[] }>("/connectors"),
   saveConnector: (
-    token: string,
     id: string,
-    patch: { enabled?: boolean; baseUrl?: string; apiKey?: string }
-  ) => adminFetch<{ ok: boolean }>(`/connectors/${id}`, token, {
+    patch: {
+      enabled?: boolean;
+      baseUrl?: string;
+      apiKey?: string;
+      mode?: "api" | "scrape";
+      scrapeUrl?: string;
+      notes?: string;
+    }
+  ) => adminFetch<{ ok: boolean }>(`/connectors/${id}`, {
     method: "PUT",
     body: JSON.stringify(patch),
   }),
-  runConnector: (token: string, id: string) =>
-    adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, token, { method: "POST" }),
-  runAll: (token: string) =>
-    adminFetch<{ ok: boolean }>("/run-ingestion", token, { method: "POST" }),
-  saveSettings: (token: string, patch: { dataMode?: "demo" | "live"; markets?: string[] }) =>
-    adminFetch<{ ok: boolean }>("/settings", token, {
+  runConnector: (id: string) =>
+    adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, { method: "POST" }),
+  runAll: () => adminFetch<{ ok: boolean }>("/run-ingestion", { method: "POST" }),
+  saveSettings: (patch: { dataMode?: "demo" | "live"; markets?: string[]; aiGatewayId?: string }) =>
+    adminFetch<{ ok: boolean }>("/settings", {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
-  purgeDemo: (token: string) =>
-    adminFetch<{ ok: boolean; deleted: number }>("/purge-demo", token, { method: "POST" }),
+  purgeDemo: () => adminFetch<{ ok: boolean; deleted: number }>("/purge-demo", { method: "POST" }),
 };

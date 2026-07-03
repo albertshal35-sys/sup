@@ -145,13 +145,19 @@ export interface BorrowerNetwork {
 export interface PublicSettings {
   dataMode: "demo" | "live";
   markets: string[];
+  aiEnabled: boolean;
+  aiGatewayId: string;
+  scrapingConfigured: boolean;
 }
 
 export interface ConnectorInfo {
   id: string;
   label: string;
   enabled: boolean;
+  mode: "api" | "scrape";
   baseUrl: string | null;
+  scrapeUrl: string | null;
+  notes: string | null;
   apiKeyLast4: string | null;
   lastRun: { status: string; finishedAt: string | null; rowsIngested: number } | null;
 }

@@ -1,22 +1,23 @@
 /**
  * Ingestion pipeline (cron: weekdays 11:00 UTC, or on demand via admin API).
  *
- * Production behavior:
- *  - Connector config (enabled / base URL / encrypted API key) lives in D1
- *    and is managed from the admin UI; env-var secrets act as fallback keys.
- *  - Each connector pulls yesterday-forward records for the configured
- *    coverage markets from its vendor, normalizes them into LienWolf's
- *    schema, and upserts idempotently (doc/permit numbers are unique).
- *  - Every run is retried up to 3× with backoff and audited in
- *    ingestion_runs. One failing source never blocks the rest.
- *  - Scoring is the final stage and only sees committed data.
+ * Every connector runs in one of two modes, configured from Settings:
  *
- * Vendor payload contract (any vendor can be adapted to this shape, or
- * a shim Worker can translate):
+ *  - **api**: pull normalized JSON from a vendor endpoint (contract below).
+ *  - **scrape**: render the configured government/portal URL with Cloudflare
+ *    Browser Rendering (managed headless browser), then have Workers AI
+ *    (@cf/moonshotai/kimi-k2.6 via AI Gateway) extract structured records
+ *    from the page — county recorder searches, Accela permit portals and
+ *    clerk sites rarely have public APIs, so scraping is the default path.
+ *
+ * Both modes feed the same idempotent upsert layer (doc/permit numbers are
+ * unique), the same retry/audit harness, and the same scoring stage.
+ *
+ * API vendor payload contract:
  *   GET {base}/deeds?since=YYYY-MM-DD&markets=County,ST;County,ST
- *     → [{ docNumber, apn, address, city, county, state, zip?, price,
+ *     → [{ docNumber, apn?, address, city, county, state, zip?, price,
  *          isCash, deedType?, buyerName, sellerName, recordedAt }]
- *   GET {base}/loans?since=…    → [{ docNumber, apn, address, city, county,
+ *   GET {base}/loans?since=…    → [{ docNumber, apn?, address, city, county,
  *          state, lenderName, lenderType?, principal, ratePct?,
  *          originatedAt, termMonths?, maturityDate?, borrowerName }]
  *   GET {base}/permits?since=…  → [{ permitNo, address, city, county, state,
@@ -24,7 +25,7 @@
  *          contractor?, ownerName }]
  *   GET {base}/liens?since=…    → [{ docNumber, address, city, county, state,
  *          lienType?, claimant, amount, filedAt, ownerName }]
- *   POST {base}/trace { names: string[] }
+ *   POST {base}/trace { names: string[] }   (Apollo-compatible enrichment)
  *     → [{ entityName, contactName, title?, phone?, email?, linkedin?,
  *          confidence }]
  */
@@ -32,6 +33,7 @@
 import type { Env } from "./index";
 import { decryptSecret } from "./crypto";
 import { rescoreTriggers } from "./scoring";
+import { extractRecords, renderPageMarkdown } from "./ai";
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 2000, 8000];
@@ -45,7 +47,10 @@ interface ConnectorResult {
 interface ConnectorCfg {
   id: string;
   enabled: boolean;
+  mode: "api" | "scrape";
   baseUrl: string | null;
+  scrapeUrl: string | null;
+  notes: string | null;
   apiKey: string | null;
 }
 
@@ -78,21 +83,29 @@ const ENV_KEY_FALLBACK: Record<string, keyof Env> = {
 
 export async function getConnectorConfig(env: Env, id: string): Promise<ConnectorCfg> {
   const row = await env.DB.prepare(
-    "SELECT enabled, base_url, api_key_ct, api_key_iv FROM connector_config WHERE id = ?1"
+    `SELECT enabled, mode, base_url, scrape_url, notes, api_key_ct, api_key_iv
+     FROM connector_config WHERE id = ?1`
   )
     .bind(id)
-    .first<{ enabled: number; base_url: string | null; api_key_ct: string | null; api_key_iv: string | null }>();
+    .first<{
+      enabled: number; mode: string; base_url: string | null; scrape_url: string | null;
+      notes: string | null; api_key_ct: string | null; api_key_iv: string | null;
+    }>();
 
   let apiKey: string | null = null;
-  if (row?.api_key_ct && row.api_key_iv && env.ADMIN_TOKEN) {
-    apiKey = await decryptSecret(env.ADMIN_TOKEN, row.api_key_ct, row.api_key_iv);
+  const kek = env.ACCESS_CODE || env.ADMIN_TOKEN;
+  if (row?.api_key_ct && row.api_key_iv && kek) {
+    apiKey = await decryptSecret(kek, row.api_key_ct, row.api_key_iv);
   }
   if (!apiKey) apiKey = (env[ENV_KEY_FALLBACK[id]] as string | undefined) ?? null;
 
   return {
     id,
     enabled: Boolean(row?.enabled),
+    mode: row?.mode === "scrape" ? "scrape" : "api",
     baseUrl: row?.base_url?.replace(/\/$/, "") ?? null,
+    scrapeUrl: row?.scrape_url ?? null,
+    notes: row?.notes ?? null,
     apiKey,
   };
 }
@@ -177,19 +190,17 @@ async function resolveProperty(env: Env, rec: AddressRec): Promise<string> {
   return id;
 }
 
-/* ------------------------------ connectors ------------------------------ */
+/* ------------------------------ record upserts ------------------------------ */
 
-type Connector = (env: Env, cfg: ConnectorCfg, markets: string[]) => Promise<ConnectorResult>;
+interface DeedRec extends AddressRec {
+  docNumber: string; price: number; isCash: boolean; deedType?: string | null;
+  buyerName: string; sellerName: string; recordedAt: string;
+}
 
-const countyDeeds: Connector = async (env, cfg, markets) => {
-  const raw = await vendorFetch(vendorUrl(cfg, "deeds", markets), { headers: authHeaders(cfg) });
-  const rows = JSON.parse(raw) as Array<{
-    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
-    zip?: string; price: number; isCash: boolean; deedType?: string; buyerName: string;
-    sellerName: string; recordedAt: string;
-  }>;
+async function upsertDeeds(env: Env, rows: DeedRec[]): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   for (const r of rows) {
+    if (!r?.docNumber || !r.address || !r.buyerName) { skipped++; continue; }
     const propertyId = await resolveProperty(env, r);
     const entityId = await resolveEntity(env, r.buyerName);
     const res = await env.DB.prepare(
@@ -198,25 +209,26 @@ const countyDeeds: Connector = async (env, cfg, markets) => {
        VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live')`
     )
       .bind(
-        `trx_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, Math.round(r.price),
+        `trx_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, Math.round(r.price || 0),
         r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName, r.recordedAt, r.docNumber
       )
       .run();
     if (res.meta.changes) ingested++; else skipped++;
   }
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
-};
+  return { ingested, skipped };
+}
 
-const countyLoans: Connector = async (env, cfg, markets) => {
-  const raw = await vendorFetch(vendorUrl(cfg, "loans", markets), { headers: authHeaders(cfg) });
-  const rows = JSON.parse(raw) as Array<{
-    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
-    lenderName: string; lenderType?: string; principal: number; ratePct?: number;
-    originatedAt: string; termMonths?: number; maturityDate?: string; borrowerName: string;
-  }>;
+interface LoanRec extends AddressRec {
+  docNumber: string; lenderName: string; lenderType?: string | null; principal: number;
+  ratePct?: number | null; originatedAt: string; termMonths?: number | null;
+  maturityDate?: string | null; borrowerName: string;
+}
+
+async function upsertLoans(env: Env, rows: LoanRec[]): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   const allowedTypes = new Set(["private", "hard_money", "bank", "credit_union", "seller"]);
   for (const r of rows) {
+    if (!r?.docNumber || !r.address || !r.lenderName) { skipped++; continue; }
     const propertyId = await resolveProperty(env, r);
     const entityId = await resolveEntity(env, r.borrowerName);
     const lenderType = allowedTypes.has(r.lenderType ?? "") ? r.lenderType! : "private";
@@ -228,25 +240,25 @@ const countyLoans: Connector = async (env, cfg, markets) => {
     )
       .bind(
         `lon_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.lenderName, lenderType,
-        Math.round(r.principal), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
+        Math.round(r.principal || 0), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
         r.maturityDate ?? null, r.docNumber
       )
       .run();
     if (res.meta.changes) ingested++; else skipped++;
   }
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
-};
+  return { ingested, skipped };
+}
 
-const permits: Connector = async (env, cfg, markets) => {
-  const raw = await vendorFetch(vendorUrl(cfg, "permits", markets), { headers: authHeaders(cfg) });
-  const rows = JSON.parse(raw) as Array<{
-    permitNo: string; apn?: string; address: string; city: string; county: string; state: string;
-    permitType: string; description?: string; valuation: number; filedAt: string;
-    status?: string; contractor?: string; ownerName: string;
-  }>;
+interface PermitRec extends AddressRec {
+  permitNo: string; permitType: string; description?: string | null; valuation: number;
+  filedAt: string; status?: string | null; contractor?: string | null; ownerName: string;
+}
+
+async function upsertPermits(env: Env, rows: PermitRec[]): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   const types = new Set(["ground_up", "structural", "addition", "demo", "remodel", "pool", "solar", "other"]);
   for (const r of rows) {
+    if (!r?.permitNo || !r.address) { skipped++; continue; }
     const propertyId = await resolveProperty(env, r);
     const entityId = await resolveEntity(env, r.ownerName);
     const res = await env.DB.prepare(
@@ -257,23 +269,24 @@ const permits: Connector = async (env, cfg, markets) => {
       .bind(
         `pmt_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.permitNo,
         types.has(r.permitType) ? r.permitType : "other", r.description ?? null,
-        Math.round(r.valuation), r.filedAt, r.status ?? "filed", r.contractor ?? null
+        Math.round(r.valuation || 0), r.filedAt, r.status ?? "filed", r.contractor ?? null
       )
       .run();
     if (res.meta.changes) ingested++; else skipped++;
   }
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
-};
+  return { ingested, skipped };
+}
 
-const liens: Connector = async (env, cfg, markets) => {
-  const raw = await vendorFetch(vendorUrl(cfg, "liens", markets), { headers: authHeaders(cfg) });
-  const rows = JSON.parse(raw) as Array<{
-    docNumber: string; apn?: string; address: string; city: string; county: string; state: string;
-    lienType?: string; claimant: string; amount: number; filedAt: string; ownerName: string;
-  }>;
+interface LienRec extends AddressRec {
+  docNumber: string; lienType?: string | null; claimant: string; amount: number;
+  filedAt: string; ownerName: string;
+}
+
+async function upsertLiens(env: Env, rows: LienRec[]): Promise<{ ingested: number; skipped: number }> {
   let ingested = 0, skipped = 0;
   const types = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens"]);
   for (const r of rows) {
+    if (!r?.docNumber || !r.address || !r.claimant) { skipped++; continue; }
     const propertyId = await resolveProperty(env, r);
     const entityId = await resolveEntity(env, r.ownerName);
     const res = await env.DB.prepare(
@@ -284,16 +297,52 @@ const liens: Connector = async (env, cfg, markets) => {
       .bind(
         `lin_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId,
         types.has(r.lienType ?? "") ? r.lienType! : "mechanics", r.claimant,
-        Math.round(r.amount), r.filedAt, r.docNumber
+        Math.round(r.amount || 0), r.filedAt, r.docNumber
       )
       .run();
     if (res.meta.changes) ingested++; else skipped++;
   }
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
+  return { ingested, skipped };
+}
+
+/* ------------------------------ connectors ------------------------------ */
+
+type Upserter = (env: Env, rows: never[]) => Promise<{ ingested: number; skipped: number }>;
+
+const RECORD_CONNECTORS: Record<string, { path: string; upsert: Upserter }> = {
+  county_deeds: { path: "deeds", upsert: upsertDeeds as Upserter },
+  county_loans: { path: "loans", upsert: upsertLoans as Upserter },
+  permits: { path: "permits", upsert: upsertPermits as Upserter },
+  liens: { path: "liens", upsert: upsertLiens as Upserter },
 };
 
-const skipTrace: Connector = async (env, cfg) => {
-  // Entities that gained a live trigger but have no high-confidence contact.
+/** API or scrape+AI — both produce normalized records for the same upsert. */
+async function runRecordConnector(
+  env: Env,
+  cfg: ConnectorCfg,
+  markets: string[]
+): Promise<ConnectorResult> {
+  const def = RECORD_CONNECTORS[cfg.id];
+  let raw: string;
+  let rows: never[];
+
+  if (cfg.mode === "scrape") {
+    if (!cfg.scrapeUrl) throw new Error("scrape_url_missing");
+    raw = await renderPageMarkdown(env, cfg.scrapeUrl);
+    rows = (await extractRecords(env, cfg.id, raw, markets, cfg.notes)) as never[];
+  } else {
+    if (!cfg.baseUrl) throw new Error("base_url_missing");
+    raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: authHeaders(cfg) });
+    rows = JSON.parse(raw) as never[];
+  }
+
+  const { ingested, skipped } = await def.upsert(env, rows);
+  return { ingested, skipped, checksum: await sha256Hex(raw) };
+}
+
+/** Contact enrichment (Apollo-compatible API). */
+async function runSkipTrace(env: Env, cfg: ConnectorCfg): Promise<ConnectorResult> {
+  if (!cfg.baseUrl) throw new Error("base_url_missing");
   const targets = await env.DB.prepare(
     `SELECT DISTINCT e.id, e.name FROM triggers t
      JOIN entities e ON e.id = t.entity_id
@@ -330,17 +379,18 @@ const skipTrace: Connector = async (env, cfg) => {
     ingested++;
   }
   return { ingested, skipped, checksum: await sha256Hex(raw) };
-};
+}
 
 export const CONNECTOR_IDS = ["county_deeds", "county_loans", "permits", "liens", "skip_trace"] as const;
 
-const CONNECTORS: Record<string, Connector> = {
-  county_deeds: countyDeeds,
-  county_loans: countyLoans,
-  permits,
-  liens,
-  skip_trace: skipTrace,
-};
+function connectorRunnable(cfg: ConnectorCfg): boolean {
+  if (!cfg.enabled) return false;
+  return cfg.mode === "scrape" ? Boolean(cfg.scrapeUrl) : Boolean(cfg.baseUrl);
+}
+
+async function runConnector(env: Env, cfg: ConnectorCfg, markets: string[]): Promise<ConnectorResult> {
+  return cfg.id === "skip_trace" ? runSkipTrace(env, cfg) : runRecordConnector(env, cfg, markets);
+}
 
 /* ------------------------------ orchestration ------------------------------ */
 
@@ -382,12 +432,11 @@ async function runWithAudit(
 
 /** Run one connector (admin "Run now"). Returns false if disabled/unconfigured. */
 export async function runSingleConnector(env: Env, id: string): Promise<boolean> {
-  const connector = CONNECTORS[id];
-  if (!connector) return false;
+  if (!(CONNECTOR_IDS as readonly string[]).includes(id)) return false;
   const cfg = await getConnectorConfig(env, id);
-  if (!cfg.enabled || !cfg.baseUrl) return false;
+  if (!connectorRunnable(cfg)) return false;
   const markets = await getMarkets(env);
-  await runWithAudit(env, id, () => connector(env, cfg, markets));
+  await runWithAudit(env, id, () => runConnector(env, cfg, markets));
   await runWithAudit(env, "scoring", async () => ({
     ingested: await rescoreTriggers(env),
     skipped: 0,
@@ -402,8 +451,8 @@ export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promis
 
   for (const id of CONNECTOR_IDS) {
     const cfg = await getConnectorConfig(env, id);
-    if (!cfg.enabled || !cfg.baseUrl) continue; // not yet configured — skip silently
-    await runWithAudit(env, id, () => CONNECTORS[id](env, cfg, markets));
+    if (!connectorRunnable(cfg)) continue; // not yet configured — skip silently
+    await runWithAudit(env, id, () => runConnector(env, cfg, markets));
   }
 
   await runWithAudit(env, "scoring", async () => ({
