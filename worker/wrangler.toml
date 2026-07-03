@@ -9,7 +9,7 @@ crons = ["0 11 * * 1-5"]
 [[d1_databases]]
 binding = "DB"
 database_name = "lienwolf-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "67867b42-9149-4509-9b09-c24ad087f1c6"
 
 [vars]
 # CORS origin of the Pages frontend
