@@ -178,3 +178,51 @@ UPDATE properties SET lat=40.888, lng=-73.86 WHERE address='842 E 224th St';
 UPDATE properties SET lat=40.689, lng=-73.937 WHERE address='410 Quincy St';
 UPDATE properties SET lat=40.706, lng=-73.799 WHERE address='160-05 89th Ave';
 UPDATE properties SET lat=40.636, lng=-74.115 WHERE address='52 Harrison Ave';
+
+-- ---------- Data integrity & intelligence demo rows (0005 features) ----------
+
+-- Provenance stamps on seeded records so badges render in demo mode
+UPDATE transactions SET source_id='county_deeds', source_method='seed', confidence='direct' WHERE origin='demo';
+UPDATE loans SET source_id='county_loans', source_method='seed', confidence='direct' WHERE origin='demo';
+UPDATE permits SET source_id='permits', source_method='seed', confidence='direct' WHERE origin='demo';
+UPDATE liens SET source_id='liens', source_method='seed', confidence='direct' WHERE origin='demo';
+
+-- Quarantine examples (what the validation gates catch)
+INSERT INTO quarantine (id, connector, record_kind, payload_json, reasons_json, source_url, status) VALUES
+  ('qtn_01', 'county_deeds', 'deed',
+   '{"docNumber":"2025120400481001","address":"91-12 95th St","city":"Queens","county":"Queens","state":"NY","price":98500000,"isCash":true,"buyerName":"EMPIRE URBAN INFILL LLC","sellerName":"K. HOLDINGS","recordedAt":"2025-12-04"}',
+   '["price $98.5M is >40x the borough median for this property class","no matching ACRIS document id"]',
+   NULL, 'pending'),
+  ('qtn_02', 'permits', 'permit',
+   '{"permitNo":"Q-2026-0","address":"","city":"Queens","county":"Queens","state":"NY","permitType":"ground_up","valuation":450000,"filedAt":"2026-09-14","ownerName":"ASTORIA DEVELOPMENT PARTNERS LLC"}',
+   '["address is empty","filed_at is in the future"]',
+   NULL, 'pending');
+
+-- Merge suggestion (entity resolution)
+INSERT INTO merge_suggestions (id, entity_a, entity_b, reason, score, status) VALUES
+  ('mrg_01', 'ent_01', 'ent_07', 'Same registered agent style + shared principal signature pattern on recent deeds', 0.72, 'pending');
+
+-- Custom signal example
+INSERT INTO custom_signals (id, name, prompt, rule_json, enabled, total_hits) VALUES
+  ('sig_01', 'Big Brooklyn cash buys',
+   'All-cash purchases over $1M in Brooklyn by entities with at least 5 flips',
+   '{"record":"deed","filters":{"isCash":true,"minPrice":1000000,"counties":["Kings"],"minFlips":5}}',
+   1, 3);
+
+-- Loan book (the lender's own funded deals)
+INSERT INTO loan_book (id, entity_id, borrower_name, property_address, principal, rate_pct, points, originated_at, term_months, maturity_date, status, notes) VALUES
+  ('lbk_01', 'ent_03', 'DANIEL OKAFOR', '19-17 Ditmars Blvd, Queens', 640000, 11.75, 2, date('now','-7 months'), 12, date('now','+5 months'), 'current', 'I/O current, renewal likely'),
+  ('lbk_02', 'ent_08', 'GRACE LIU', '52 Harrison Ave, Staten Island', 385000, 12.25, 2, date('now','-11 months'), 12, date('now','+1 months'), 'current', 'payoff conversation started');
+
+-- Source stats baseline (feeds the freshness monitor in demo)
+INSERT OR IGNORE INTO source_stats (connector, day, rows_ingested, rows_quarantined) VALUES
+  ('county_deeds', date('now','-3 days'), 412, 2),
+  ('county_deeds', date('now','-2 days'), 388, 1),
+  ('county_deeds', date('now','-1 days'), 405, 0),
+  ('county_loans', date('now','-3 days'), 121, 0),
+  ('county_loans', date('now','-2 days'), 134, 1),
+  ('county_loans', date('now','-1 days'), 117, 0),
+  ('permits', date('now','-2 days'), 96, 1),
+  ('permits', date('now','-1 days'), 88, 0),
+  ('liens', date('now','-2 days'), 23, 0),
+  ('liens', date('now','-1 days'), 27, 1);

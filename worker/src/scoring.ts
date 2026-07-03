@@ -110,24 +110,38 @@ export async function rescoreTriggers(env: Env): Promise<number> {
     });
   }
 
-  /* 4 — Contractor Lien Monitoring */
+  /* 4 — Distress monitoring: liens, lis pendens, violations, tax liens,
+         auction calendar. Each event type carries its own base urgency and
+         rescue-capital framing. */
+  const DISTRESS: Record<string, { base: number; headline: (amt: string, claimant: string) => string; window: number }> = {
+    mechanics: { base: 55, window: 21, headline: (a, c) => `$${a} mechanics lien by ${c} — draw likely frozen` },
+    lis_pendens: { base: 74, window: 45, headline: (a, c) => `Lis pendens filed by ${c} — pre-foreclosure, rescue window open` },
+    auction: { base: 78, window: 45, headline: (a, c) => `Scheduled for foreclosure auction (${c}) — last-chance refinance` },
+    tax: { base: 52, window: 45, headline: (a, c) => `$${a} tax lien (${c}) — municipal pressure building` },
+    violation: { base: 42, window: 30, headline: (a, c) => `${c} violation, $${a} in penalties — project likely stalled` },
+    judgment: { base: 58, window: 45, headline: (a, c) => `$${a} judgment lien by ${c}` },
+  };
+
   const freshLiens = await env.DB.prepare(
-    `SELECT li.id AS lien_id, li.entity_id, li.property_id, li.amount, li.claimant,
+    `SELECT li.id AS lien_id, li.entity_id, li.property_id, li.amount, li.claimant, li.lien_type,
+            CAST(julianday('now') - julianday(li.filed_at) AS INTEGER) AS age_days,
             EXISTS (
               SELECT 1 FROM triggers t
               WHERE t.kind = 'maturity' AND t.entity_id = li.entity_id
                 AND t.status NOT IN ('dismissed','converted')
             ) AS has_maturing_note
      FROM liens li
-     WHERE li.status = 'active' AND li.lien_type = 'mechanics'
-       AND li.filed_at >= date('now','-21 days')
+     WHERE li.status = 'active'
+       AND li.filed_at >= date('now','-45 days')
        AND li.entity_id IS NOT NULL`
-  ).all<{ lien_id: string; entity_id: string; property_id: string; amount: number; claimant: string; has_maturing_note: number }>();
+  ).all<{ lien_id: string; entity_id: string; property_id: string; amount: number; claimant: string; lien_type: string; age_days: number; has_maturing_note: number }>();
 
   for (const li of freshLiens.results) {
+    const def = DISTRESS[li.lien_type] ?? DISTRESS.mechanics;
+    if (li.age_days > def.window) continue;
     const score = Math.min(
       100,
-      55 + Math.round(li.amount / 10_000) + (li.has_maturing_note ? 15 : 0)
+      def.base + Math.round(li.amount / 10_000) + (li.has_maturing_note ? 15 : 0)
     );
     emitted += await upsertTrigger(env, {
       kind: "lien",
@@ -135,15 +149,15 @@ export async function rescoreTriggers(env: Env): Promise<number> {
       propertyId: li.property_id,
       refId: li.lien_id,
       score,
-      headline: `$${fmtK(li.amount)} mechanics lien by ${li.claimant} — draw likely frozen`,
-      payload: { amount: li.amount, claimant: li.claimant },
+      headline: def.headline(fmtK(li.amount), li.claimant),
+      payload: { amount: li.amount, claimant: li.claimant, lienType: li.lien_type },
     });
   }
 
   return emitted;
 }
 
-async function upsertTrigger(
+export async function upsertTrigger(
   env: Env,
   t: {
     kind: string;

@@ -2,7 +2,7 @@ import type { TriggerItem } from "../types";
 import { useApp, useVisibleFeed } from "../store";
 import { ago, classNames, money, pct } from "../lib/format";
 import { ConfidenceChip, Countdown, EmptyState, ScoreGauge, TileHeader, UrgencyPill } from "./primitives";
-import { IconAlert, IconBookmark, IconCash, IconClock, IconHammer, IconMail, IconPhone, IconX } from "./icons";
+import { IconAlert, IconBookmark, IconCash, IconClock, IconHammer, IconMail, IconPhone, IconPulse, IconX } from "./icons";
 
 /* ------------------------- shared row actions ------------------------- */
 
@@ -285,7 +285,17 @@ export function PermitFeed({ full = false, items: itemsProp }: { full?: boolean;
   );
 }
 
-/* -------------------- 4 — Contractor lien alerts -------------------- */
+/* ----- 4 — Distress monitoring: liens, lis pendens, violations, auctions ----- */
+
+const DISTRESS_LABEL: Record<string, string> = {
+  mechanics: "mechanics lien",
+  tax: "tax lien",
+  hoa: "HOA lien",
+  judgment: "judgment",
+  lis_pendens: "lis pendens",
+  violation: "violation",
+  auction: "foreclosure auction",
+};
 
 export function LienFeed({ full = false, items: itemsProp }: { full?: boolean; items?: TriggerItem[] }) {
   const visible = useVisibleFeed("lien");
@@ -297,8 +307,8 @@ export function LienFeed({ full = false, items: itemsProp }: { full?: boolean; i
     <section className="card overflow-hidden">
       <TileHeader
         icon={<IconAlert className="h-4 w-4" />}
-        title="Lien Monitoring"
-        hint="rescue-capital signals"
+        title="Distress Monitoring"
+        hint="liens · lis pendens · violations · auctions"
         action={
           rows.some((r) => r.urgency === "critical") ? (
             <span className="flex items-center gap-1.5 text-2xs font-medium text-danger">
@@ -335,7 +345,7 @@ export function LienFeed({ full = false, items: itemsProp }: { full?: boolean; i
               <span className="text-2xs tabular-nums text-tx3">{ago(item.detectedAt)}</span>
             </div>
             <div className="mt-0.5 truncate text-xs text-tx2">
-              {item.payload.claimant} · mechanics lien
+              {item.payload.claimant} · {DISTRESS_LABEL[String(item.payload.lienType ?? "mechanics")] ?? "lien"}
             </div>
             <div className="mt-1.5 flex items-center justify-between gap-2">
               <div className="min-w-0 truncate text-2xs text-tx3">
@@ -345,7 +355,47 @@ export function LienFeed({ full = false, items: itemsProp }: { full?: boolean; i
             </div>
           </button>
         ))}
-        {rows.length === 0 && <EmptyState label="No fresh liens. Quiet is good — for them." />}
+        {rows.length === 0 && <EmptyState label="No fresh distress events. Quiet is good — for them." />}
+      </div>
+    </section>
+  );
+}
+
+/* ------------- 5 — Custom signals (operator-defined rules) ------------- */
+
+export function CustomSignalFeed() {
+  const items = useVisibleFeed("custom");
+  const openResume = useApp((s) => s.openResume);
+  if (items.length === 0) return null;
+
+  return (
+    <section className="card overflow-hidden">
+      <TileHeader
+        icon={<IconPulse className="h-4 w-4" />}
+        title="Your Signals"
+        hint="rules you defined in Settings"
+      />
+      <div className="flex flex-col">
+        {items.slice(0, 4).map((item) => (
+          <button
+            key={item.id}
+            onClick={() => openResume(item.entity.id, item)}
+            className="group border-t border-line px-4 py-3 text-left transition-colors hover:bg-raised/60 sm:px-5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-xs font-medium text-tx1">{item.entity.name}</span>
+              <span className="shrink-0 rounded-md border border-violet/25 bg-violet/10 px-1.5 py-0.5 text-2xs font-medium text-violet">
+                {String(item.payload.signalName ?? "custom")}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-2xs text-tx3">
+                {item.property?.address ?? "—"} · {item.property?.city ?? ""}
+              </span>
+              <RowActions item={item} />
+            </div>
+          </button>
+        ))}
       </div>
     </section>
   );

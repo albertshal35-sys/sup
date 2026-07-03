@@ -1,5 +1,5 @@
 import { KpiStrip } from "./KpiStrip";
-import { CashPoorFeed, LienFeed, MaturityFeed, PermitFeed } from "./Feeds";
+import { CashPoorFeed, CustomSignalFeed, LienFeed, MaturityFeed, PermitFeed } from "./Feeds";
 import { PipelineCard } from "./PipelineCard";
 
 /**
@@ -21,6 +21,7 @@ export function Dashboard() {
         <div className="flex flex-col gap-3 lg:col-span-2">
           <LienFeed />
           <CashPoorFeed />
+          <CustomSignalFeed />
           <PipelineCard />
         </div>
       </div>

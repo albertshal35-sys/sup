@@ -8,8 +8,17 @@ const LABELS: Record<string, string> = {
   county_loans: "County loans",
   permits: "Permit portals",
   liens: "Lien filings",
+  lis_pendens: "Lis pendens",
+  violations: "Violations",
+  tax_liens: "Tax liens",
+  auctions: "Auctions",
+  satisfactions: "Satisfactions",
+  ucc_filings: "UCC filings",
+  corp_registry: "Corp registry",
   skip_trace: "Contact enrichment",
   scoring: "Trigger scoring",
+  custom_signals: "Your signals",
+  resolution: "Entity resolution",
 };
 
 function ago(iso: string): string {

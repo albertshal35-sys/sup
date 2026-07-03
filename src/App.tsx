@@ -16,6 +16,8 @@ import { PipelineView } from "./components/Pipeline";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoginPage } from "./components/Login";
 import { MapView } from "./components/MapView";
+import { LendersView } from "./components/Lenders";
+import { LoanBookView } from "./components/LoanBook";
 
 export default function App() {
   const view = useApp((s) => s.view);
@@ -49,6 +51,8 @@ export default function App() {
           {view === "permit" && <PermitView />}
           {view === "lien" && <LienView />}
           {view === "map" && <MapView />}
+          {view === "lenders" && <LendersView />}
+          {view === "loanbook" && <LoanBookView />}
           {view === "watchlist" && <PipelineView />}
           {view === "settings" && <SettingsView />}
         </main>

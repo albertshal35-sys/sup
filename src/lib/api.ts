@@ -5,20 +5,32 @@
  */
 
 import type {
+  BackfillRow,
   BorrowerResume,
   ConnectorInfo,
+  CustomSignal,
+  DataQuality,
   IngestionRun,
   Kpis,
   Lead,
+  LenderLoan,
+  LenderRow,
+  LoanBookEntry,
   PublicSettings,
   TriggerItem,
   TriggerKind,
 } from "../types";
 import {
   mockCashPoor,
+  mockCustomSignals,
+  mockCustomTriggers,
+  mockDataQuality,
   mockIngestion,
   mockKpis,
+  mockLenderLoans,
+  mockLenders,
   mockLiens,
+  mockLoanBook,
   mockMaturities,
   mockPermits,
   mockResumes,
@@ -163,6 +175,7 @@ const FEED_PATHS: Record<TriggerKind, string> = {
   cash_poor: "/triggers/cash-poor",
   permit: "/triggers/permits",
   lien: "/triggers/liens",
+  custom: "/triggers/custom",
 };
 
 const FEED_MOCKS: Record<TriggerKind, TriggerItem[]> = {
@@ -170,6 +183,7 @@ const FEED_MOCKS: Record<TriggerKind, TriggerItem[]> = {
   cash_poor: mockCashPoor,
   permit: mockPermits,
   lien: mockLiens,
+  custom: mockCustomTriggers,
 };
 
 type Mode = "demo" | "live" | "offline";
@@ -229,6 +243,100 @@ export async function getResume(entityId: string, fallbackItem?: TriggerItem): P
   if (seeded) return seeded;
   if (fallbackItem) return synthesizeResume(fallbackItem);
   return null;
+}
+
+/* ------------------- competitor intelligence & loan book ------------------- */
+
+interface RawLenderRow {
+  lender_name: string; loans: number; ucc_filings: number; volume: number | null;
+  avg_rate: number | null; maturing_90d: number; maturing_volume: number | null; payoffs_90d: number;
+}
+
+export async function getLenders(mode: Mode = "offline"): Promise<LenderRow[]> {
+  if (mode !== "offline") {
+    const live = await tryFetch<{ lenders: RawLenderRow[] }>("/lenders");
+    if (live) {
+      const rows = live.lenders.map((r) => ({
+        lenderName: r.lender_name, loans: r.loans, uccFilings: r.ucc_filings,
+        volume: r.volume ?? 0, avgRate: r.avg_rate, maturing90d: r.maturing_90d,
+        maturingVolume: r.maturing_volume ?? 0, payoffs90d: r.payoffs_90d,
+      }));
+      if (rows.length || mode === "live") return rows;
+    } else if (mode === "live") return [];
+  }
+  return mockLenders;
+}
+
+interface RawLenderLoan {
+  id: string; principal: number; rate_pct: number | null; originated_at: string;
+  maturity: string | null; status: string; instrument: string; source_url: string | null;
+  confidence: LenderLoan["confidence"] | null; entity_id: string | null; entity_name: string | null;
+  flips_36mo: number | null; velocity_score: number | null; address: string | null; city: string | null;
+}
+
+export async function getLenderLoans(name: string, mode: Mode = "offline"): Promise<LenderLoan[]> {
+  if (mode !== "offline") {
+    const live = await tryFetch<{ loans: RawLenderLoan[] }>(`/lenders/${encodeURIComponent(name)}/loans`);
+    if (live) {
+      const rows = live.loans.map((r) => ({
+        id: r.id, principal: r.principal, ratePct: r.rate_pct, originatedAt: r.originated_at,
+        maturity: r.maturity, status: r.status, instrument: r.instrument,
+        entityId: r.entity_id, entityName: r.entity_name ? titleCase(r.entity_name) : null,
+        flips36mo: r.flips_36mo, velocityScore: r.velocity_score,
+        address: r.address, city: r.city, sourceUrl: r.source_url,
+        confidence: r.confidence ?? "direct",
+      }));
+      if (rows.length || mode === "live") return rows;
+    } else if (mode === "live") return [];
+  }
+  return mockLenderLoans[name] ?? [];
+}
+
+interface RawLoanBookRow {
+  id: string; entity_id: string | null; entity_name: string | null; borrower_name: string;
+  property_address: string | null; principal: number; rate_pct: number; points: number | null;
+  originated_at: string; term_months: number; maturity_date: string | null;
+  status: LoanBookEntry["status"]; notes: string | null;
+}
+
+export async function getLoanBook(mode: Mode = "offline"): Promise<LoanBookEntry[]> {
+  if (mode !== "offline") {
+    const live = await tryFetch<{ loans: RawLoanBookRow[] }>("/loanbook");
+    if (live) {
+      return live.loans.map((r) => ({
+        id: r.id, entityId: r.entity_id, entityName: r.entity_name ? titleCase(r.entity_name) : null,
+        borrowerName: titleCase(r.borrower_name), propertyAddress: r.property_address,
+        principal: r.principal, ratePct: r.rate_pct, points: r.points,
+        originatedAt: r.originated_at, termMonths: r.term_months, maturityDate: r.maturity_date,
+        status: r.status, notes: r.notes,
+      }));
+    }
+    return [];
+  }
+  return mockLoanBook;
+}
+
+export async function saveLoanBookEntry(entry: Partial<LoanBookEntry>): Promise<{ ok: boolean; id?: string }> {
+  try {
+    const res = await fetch("/api/loanbook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(entry),
+    });
+    const body = (await res.json().catch(() => ({}))) as { id?: string };
+    return { ok: res.ok, id: body.id };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function deleteLoanBookEntry(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/loanbook/${id}`, { method: "DELETE", headers: authHeaders() });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------------ CRM sync ------------------------------ */
@@ -313,11 +421,14 @@ export const admin = {
       mode?: "api" | "scrape";
       scrapeUrl?: string;
       notes?: string;
+      fieldMap?: string;
     }
   ) => adminFetch<{ ok: boolean }>(`/connectors/${id}`, {
     method: "PUT",
     body: JSON.stringify(patch),
   }),
+  automapConnector: (id: string) =>
+    adminFetch<{ ok: boolean; fieldMap: Record<string, unknown> }>(`/connectors/${id}/automap`, { method: "POST" }),
   runConnector: (id: string) =>
     adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, { method: "POST" }),
   runAll: () => adminFetch<{ ok: boolean }>("/run-ingestion", { method: "POST" }),
@@ -336,4 +447,74 @@ export const admin = {
     }),
   purgeDemo: () => adminFetch<{ ok: boolean; deleted: number }>("/purge-demo", { method: "POST" }),
   testAlerts: () => adminFetch<{ ok: boolean; error?: string }>("/alerts/test", { method: "POST" }),
+
+  /* ---- data quality ---- */
+  getDataQuality: async (): Promise<DataQuality | null> => {
+    const res = await adminFetch<{
+      pendingQuarantine: number; quarantined7d: number; ingested7d: number;
+      anomalies: DataQuality["anomalies"];
+      quarantine: Array<{ id: string; connector: string; record_kind: string; payload_json: string; reasons_json: string; source_url: string | null; created_at: string }>;
+      merges: Array<{ id: string; name_a: string; name_b: string; reason: string; score: number }>;
+    }>("/data-quality");
+    if (!res.ok) return null;
+    const d = res.data;
+    return {
+      pendingQuarantine: d.pendingQuarantine, quarantined7d: d.quarantined7d, ingested7d: d.ingested7d,
+      anomalies: d.anomalies,
+      quarantine: d.quarantine.map((q) => ({
+        id: q.id, connector: q.connector, recordKind: q.record_kind,
+        payload: safeJson(q.payload_json), reasons: safeJson(q.reasons_json, []) as unknown as string[],
+        sourceUrl: q.source_url, createdAt: q.created_at,
+      })),
+      merges: d.merges.map((m) => ({ id: m.id, nameA: titleCase(m.name_a), nameB: titleCase(m.name_b), reason: m.reason, score: m.score })),
+    };
+  },
+  quarantineAction: (id: string, action: "approve" | "discard") =>
+    adminFetch<{ ok: boolean }>(`/quarantine/${id}`, { method: "POST", body: JSON.stringify({ action }) }),
+  mergeAction: (id: string, action: "merge" | "dismiss") =>
+    adminFetch<{ ok: boolean }>(`/merges/${id}`, { method: "POST", body: JSON.stringify({ action }) }),
+
+  /* ---- custom signals ---- */
+  getSignals: async (): Promise<CustomSignal[]> => {
+    const res = await adminFetch<{ signals: Array<{ id: string; name: string; prompt: string; rule_json: string; enabled: number; last_run_at: string | null; total_hits: number }> }>("/signals");
+    if (!res.ok) return [];
+    return res.data.signals.map((s) => ({
+      id: s.id, name: s.name, prompt: s.prompt, rule: safeJson(s.rule_json),
+      enabled: Boolean(s.enabled), lastRunAt: s.last_run_at, totalHits: s.total_hits,
+    }));
+  },
+  compileSignal: (prompt: string) =>
+    adminFetch<{ rule: Record<string, unknown> } | { error: string; detail?: string }>("/signals/compile", {
+      method: "POST", body: JSON.stringify({ prompt }),
+    }),
+  createSignal: (name: string, prompt: string, rule: Record<string, unknown>) =>
+    adminFetch<{ ok: boolean; id: string; hits: number }>("/signals", {
+      method: "POST", body: JSON.stringify({ name, prompt, rule }),
+    }),
+  toggleSignal: (id: string, enabled: boolean) =>
+    adminFetch<{ ok: boolean }>(`/signals/${id}`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  deleteSignal: (id: string) => adminFetch<{ ok: boolean }>(`/signals/${id}`, { method: "DELETE" }),
+
+  /* ---- backfill ---- */
+  getBackfill: async (): Promise<{ backfills: BackfillRow[]; eligible: string[] } | null> => {
+    const res = await adminFetch<{ backfills: BackfillRow[]; eligible: string[] }>("/backfill");
+    return res.ok ? res.data : null;
+  },
+  startBackfill: (id: string) => adminFetch<{ ok: boolean }>(`/backfill/${id}`, { method: "POST" }),
+  chunkBackfill: (id: string) =>
+    adminFetch<{ ok: boolean; done: boolean; ingested: number }>(`/backfill/${id}/chunk`, { method: "POST" }),
 };
+
+/** Offline demo fallbacks for the Settings data-quality surfaces. */
+export const offlineAdminData = {
+  dataQuality: mockDataQuality,
+  signals: mockCustomSignals,
+};
+
+function safeJson(s: string, fallback: unknown = {}): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return fallback as Record<string, unknown>;
+  }
+}

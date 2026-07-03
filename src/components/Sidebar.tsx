@@ -2,6 +2,7 @@ import { useApp, useVisibleFeed, type View } from "../store";
 import { classNames } from "../lib/format";
 import {
   IconAlert,
+  IconBook,
   IconCash,
   IconClock,
   IconCollapse,
@@ -10,6 +11,7 @@ import {
   IconGrid,
   IconHammer,
   IconKanban,
+  IconLandmark,
   IconMap,
   IconRadar,
   IconX,
@@ -27,8 +29,13 @@ const NAV: NavItem[] = [
   { view: "maturity", label: "Maturities", icon: IconClock },
   { view: "cash_poor", label: "Cash-Poor", icon: IconCash },
   { view: "permit", label: "Permits", icon: IconHammer },
-  { view: "lien", label: "Lien Alerts", icon: IconAlert },
+  { view: "lien", label: "Distress", icon: IconAlert },
   { view: "map", label: "Map", icon: IconMap },
+];
+
+const INTEL_NAV: NavItem[] = [
+  { view: "lenders", label: "Lenders", icon: IconLandmark },
+  { view: "loanbook", label: "Loan Book", icon: IconBook },
   { view: "watchlist", label: "Pipeline", icon: IconKanban },
 ];
 
@@ -125,13 +132,23 @@ function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollap
       </div>
 
       {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-1 px-2">
+      <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2">
         {expanded && (
           <div className="px-3 pb-1.5 text-2xs font-medium text-tx3">
             Signal Feeds
           </div>
         )}
         {NAV.map((item) => (
+          <NavButton key={item.view} item={item} expanded={expanded} />
+        ))}
+        {expanded ? (
+          <div className="px-3 pb-1.5 pt-3 text-2xs font-medium text-tx3">
+            Deal Flow
+          </div>
+        ) : (
+          <div className="mx-auto my-2 h-px w-6 bg-line" />
+        )}
+        {INTEL_NAV.map((item) => (
           <NavButton key={item.view} item={item} expanded={expanded} />
         ))}
       </nav>

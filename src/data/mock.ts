@@ -409,3 +409,125 @@ export function synthesizeResume(item: TriggerItem): BorrowerResume {
     network: networkFor(item.entity.id),
   };
 }
+
+/* ================= data integrity & intelligence (0005) ================= */
+
+import type {
+  CustomSignal,
+  DataQuality,
+  LenderLoan,
+  LenderRow,
+  LoanBookEntry,
+} from "../types";
+
+// Extra distress events so the demo shows the full event spectrum
+// (lis pendens / violations feed the same distress feed as mechanics liens).
+mockLiens.push(
+  {
+    id: "trg_lp1", kind: "lien", score: 89, urgency: "hot",
+    headline: "Lis pendens filed by Empire State Note Co — pre-foreclosure, rescue window open",
+    payload: { amount: 505000, claimant: "Empire State Note Co", lienType: "lis_pendens" },
+    detectedAt: daysFromNow(-2), status: "new", entity: entities.okafor,
+    property: { address: "19-17 Ditmars Blvd", city: "Queens", county: "Queens", state: "NY", estValue: 748000, lat: 40.774, lng: -73.911 },
+    contact: { phone: "(917) 555-0197", email: "d.okafor@gmail.com", confidence: 0.88 },
+  },
+  {
+    id: "trg_vi1", kind: "lien", score: 61, urgency: "warm",
+    headline: "DOB violation, $28K in penalties — project likely stalled",
+    payload: { amount: 28000, claimant: "DOB", lienType: "violation" },
+    detectedAt: daysFromNow(-4), status: "new", entity: entities.lonestar,
+    property: { address: "91-12 95th St", city: "Queens", county: "Queens", state: "NY", estValue: 442000, lat: 40.687, lng: -73.851 },
+    contact: { phone: "(929) 555-0110", email: "jw@empireinfill.com", confidence: 0.82 },
+  }
+);
+
+export const mockCustomTriggers: TriggerItem[] = [
+  {
+    id: "trg_cs1", kind: "custom", score: 70, urgency: "warm",
+    headline: "Big Brooklyn cash buys — $1.41M on " + daysFromNow(-41).slice(0, 10),
+    payload: { signalName: "Big Brooklyn cash buys", amount: 1410000, eventDate: daysFromNow(-41).slice(0, 10) },
+    detectedAt: daysFromNow(-1), status: "new", entity: entities.ironwood,
+    property: { address: "22-05 31st Ave", city: "Queens", county: "Queens", state: "NY", estValue: 2850000, lat: 40.767, lng: -73.925 },
+    contact: { phone: "(347) 555-0182", email: "praman@astoriadev.com", confidence: 0.91 },
+  },
+];
+
+export const mockCustomSignals: CustomSignal[] = [
+  {
+    id: "sig_01",
+    name: "Big Brooklyn cash buys",
+    prompt: "All-cash purchases over $1M in Brooklyn by entities with at least 5 flips",
+    rule: { record: "deed", filters: { isCash: true, minAmount: 1000000, counties: ["Kings"], minFlips: 5 } },
+    enabled: true, lastRunAt: daysFromNow(-1), totalHits: 3,
+  },
+];
+
+export const mockDataQuality: DataQuality = {
+  pendingQuarantine: 2,
+  quarantined7d: 5,
+  ingested7d: 2841,
+  anomalies: [],
+  quarantine: [
+    {
+      id: "qtn_01", connector: "county_deeds", recordKind: "deed",
+      payload: { docNumber: "2025120400481001", address: "91-12 95th St", city: "Queens", price: 98500000, isCash: true, buyerName: "EMPIRE URBAN INFILL LLC", recordedAt: "2025-12-04" },
+      reasons: ["price $98.5M is >40x the borough median for this property class", "no matching ACRIS document id"],
+      sourceUrl: null, createdAt: daysFromNow(-1),
+    },
+    {
+      id: "qtn_02", connector: "permits", recordKind: "permit",
+      payload: { permitNo: "Q-2026-0", address: "", city: "Queens", permitType: "ground_up", valuation: 450000, ownerName: "ASTORIA DEVELOPMENT PARTNERS LLC" },
+      reasons: ["address is empty", "filed_at is in the future"],
+      sourceUrl: null, createdAt: daysFromNow(-2),
+    },
+  ],
+  merges: [
+    {
+      id: "mrg_01", nameA: "Bushwick Equity Group LLC", nameB: "Empire Urban Infill LLC",
+      reason: "Same registered agent style + shared principal signature pattern on recent deeds",
+      score: 0.72,
+    },
+  ],
+};
+
+export const mockLenders: LenderRow[] = [
+  { lenderName: "Anchor Bridge Capital", loans: 3, uccFilings: 0, volume: 2_155_000, avgRate: 10.92, maturing90d: 2, maturingVolume: 1_708_000, payoffs90d: 1 },
+  { lenderName: "Hudson Peak Funding", loans: 3, uccFilings: 0, volume: 1_438_000, avgRate: 10.72, maturing90d: 2, maturingVolume: 1_073_000, payoffs90d: 1 },
+  { lenderName: "Empire State Note Co", loans: 2, uccFilings: 1, volume: 803_000, avgRate: 11.7, maturing90d: 2, maturingVolume: 803_000, payoffs90d: 0 },
+  { lenderName: "Gotham Private Lending", loans: 2, uccFilings: 0, volume: 664_000, avgRate: 11.93, maturing90d: 1, maturingVolume: 352_000, payoffs90d: 1 },
+];
+
+export const mockLenderLoans: Record<string, LenderLoan[]> = {
+  "Anchor Bridge Capital": [
+    { id: "lon_04", principal: 1_090_000, ratePct: 10.5, originatedAt: daysFromNow(-303).slice(0, 10), maturity: daysFromNow(57).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_06", entityName: "Morris Park Capital LLC", flips36mo: 8, velocityScore: 81, address: "603 Bainbridge St", city: "Brooklyn", sourceUrl: null, confidence: "direct" },
+    { id: "lon_01", principal: 618_000, ratePct: 11.25, originatedAt: daysFromNow(-280).slice(0, 10), maturity: daysFromNow(84).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_01", entityName: "Bushwick Equity Group LLC", flips36mo: 14, velocityScore: 91, address: "448 Lefferts Ave", city: "Brooklyn", sourceUrl: null, confidence: "corroborated" },
+    { id: "lon_08", principal: 447_000, ratePct: 11.0, originatedAt: daysFromNow(-668).slice(0, 10), maturity: daysFromNow(-304).slice(0, 10), status: "paid_off", instrument: "mortgage", entityId: "ent_01", entityName: "Bushwick Equity Group LLC", flips36mo: 14, velocityScore: 91, address: "410 Quincy St", city: "Brooklyn", sourceUrl: null, confidence: "direct" },
+  ],
+  "Hudson Peak Funding": [
+    { id: "lon_07", principal: 331_000, ratePct: 10.9, originatedAt: daysFromNow(-311).slice(0, 10), maturity: daysFromNow(52).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_04", entityName: "Canarsie Gate Holdings LLC", flips36mo: 6, velocityScore: 72, address: "224 Malcolm X Blvd", city: "Brooklyn", sourceUrl: null, confidence: "direct" },
+    { id: "lon_02", principal: 742_000, ratePct: 10.75, originatedAt: daysFromNow(-292).slice(0, 10), maturity: daysFromNow(71).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_10", entityName: "Crown Heights Restorations LLC", flips36mo: 12, velocityScore: 87, address: "789 Hancock St", city: "Brooklyn", sourceUrl: null, confidence: "extracted" },
+  ],
+  "Empire State Note Co": [
+    { id: "lon_03", principal: 505_000, ratePct: 11.9, originatedAt: daysFromNow(-254).slice(0, 10), maturity: daysFromNow(110).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_03", entityName: "Daniel Okafor", flips36mo: 11, velocityScore: 88, address: "19-17 Ditmars Blvd", city: "Queens", sourceUrl: null, confidence: "direct" },
+    { id: "lon_06", principal: 298_000, ratePct: 11.5, originatedAt: daysFromNow(-275).slice(0, 10), maturity: daysFromNow(88).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_07", entityName: "Empire Urban Infill LLC", flips36mo: 5, velocityScore: 69, address: "91-12 95th St", city: "Queens", sourceUrl: null, confidence: "direct" },
+  ],
+  "Gotham Private Lending": [
+    { id: "lon_05", principal: 352_000, ratePct: 12.1, originatedAt: daysFromNow(-267).slice(0, 10), maturity: daysFromNow(93).slice(0, 10), status: "active", instrument: "mortgage", entityId: "ent_08", entityName: "Grace Liu", flips36mo: 7, velocityScore: 86, address: "1174 Boston Rd", city: "Bronx", sourceUrl: null, confidence: "direct" },
+    { id: "lon_10", principal: 312_000, ratePct: 11.75, originatedAt: daysFromNow(-425).slice(0, 10), maturity: daysFromNow(-61).slice(0, 10), status: "refinanced", instrument: "mortgage", entityId: "ent_05", entityName: "Blue Heron Builders LLC", flips36mo: 17, velocityScore: 89, address: "52 Harrison Ave", city: "Staten Island", sourceUrl: null, confidence: "direct" },
+  ],
+};
+
+export const mockLoanBook: LoanBookEntry[] = [
+  {
+    id: "lbk_01", entityId: "ent_03", entityName: "Daniel Okafor", borrowerName: "Daniel Okafor",
+    propertyAddress: "19-17 Ditmars Blvd, Queens", principal: 640_000, ratePct: 11.75, points: 2,
+    originatedAt: daysFromNow(-213).slice(0, 10), termMonths: 12, maturityDate: daysFromNow(152).slice(0, 10),
+    status: "current", notes: "I/O current, renewal likely",
+  },
+  {
+    id: "lbk_02", entityId: "ent_08", entityName: "Grace Liu", borrowerName: "Grace Liu",
+    propertyAddress: "52 Harrison Ave, Staten Island", principal: 385_000, ratePct: 12.25, points: 2,
+    originatedAt: daysFromNow(-334).slice(0, 10), termMonths: 12, maturityDate: daysFromNow(31).slice(0, 10),
+    status: "current", notes: "payoff conversation started",
+  },
+];
