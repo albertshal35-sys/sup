@@ -8,11 +8,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "worker:dev": "wrangler dev --config worker/wrangler.toml",
-    "db:schema": "wrangler d1 execute lienwolf-db --config worker/wrangler.toml --file db/schema.sql",
-    "db:seed": "wrangler d1 execute lienwolf-db --config worker/wrangler.toml --file db/seed.sql",
-    "deploy:worker": "wrangler deploy --config worker/wrangler.toml",
-    "deploy:pages": "npm run build && wrangler pages deploy dist --project-name lienwolf"
+    "worker:dev": "npm run build && wrangler dev --config worker/wrangler.toml",
+    "db:migrate": "wrangler d1 migrations apply lienwolf-db --config worker/wrangler.toml --remote",
+    "db:migrate:local": "wrangler d1 migrations apply lienwolf-db --config worker/wrangler.toml",
+    "db:seed": "wrangler d1 execute lienwolf-db --config worker/wrangler.toml --file db/seed.sql --remote",
+    "deploy": "npm run build && wrangler deploy --config worker/wrangler.toml"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",

@@ -6,6 +6,13 @@ compatibility_date = "2026-06-01"
 [triggers]
 crons = ["0 11 * * 1-5"]
 
+# Single deploy: the Worker serves the built frontend as static assets and
+# handles /api/* itself. SPA fallback keeps client-side view routing working.
+[assets]
+directory = "../dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "lienwolf-db"
@@ -16,7 +23,8 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 ALLOWED_ORIGIN = "*"
 
 # Secrets (set via `wrangler secret put <NAME> --config worker/wrangler.toml`):
-#   COUNTY_API_KEY      - county recorder data vendor
-#   PERMIT_API_KEY      - municipal permit aggregator
-#   SKIP_TRACE_API_KEY  - skip-trace provider
+#   ADMIN_TOKEN         - bearer for /api/admin/* + KEK for stored vendor keys
 #   WEBHOOK_SECRET      - HMAC secret for inbound record webhooks
+#   COUNTY_API_KEY      - fallback county recorder key (UI-managed keys preferred)
+#   PERMIT_API_KEY      - fallback permit aggregator key
+#   SKIP_TRACE_API_KEY  - fallback skip-trace key

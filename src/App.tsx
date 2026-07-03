@@ -13,6 +13,7 @@ import {
   SettingsView,
 } from "./components/Views";
 import { PipelineView } from "./components/Pipeline";
+import { CommandPalette } from "./components/CommandPalette";
 
 export default function App() {
   const view = useApp((s) => s.view);
@@ -41,6 +42,7 @@ export default function App() {
       </div>
 
       <BorrowerResumeModal />
+      <CommandPalette />
     </div>
   );
 }

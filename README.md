@@ -18,10 +18,11 @@ need capital.
 
 ## Stack
 
-- **Frontend** — React 18 + TypeScript + Tailwind (obsidian glassmorphic design system, bento grid, Zustand state). Deploys to **Cloudflare Pages**.
-- **API** — **Cloudflare Worker** (`worker/`), zero-dependency edge router + HMAC-verified record webhooks.
-- **Database** — **Cloudflare D1** (`db/schema.sql`), materialized `triggers` table for O(1) feed reads.
-- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. Each connector is retried 3× with backoff and audited in `ingestion_runs`; re-runs are idempotent.
+- **Single Worker deploy** — one Cloudflare Worker serves the built React frontend as static assets **and** the `/api/*` edge API. One URL, one `npm run deploy`.
+- **Frontend** — React 18 + TypeScript + Tailwind (dual-theme design system, bento grid, custom component kit, Zustand state, ⌘K palette, drag-and-drop pipeline).
+- **Database** — **Cloudflare D1**; schema managed by migrations in `worker/migrations/` (applied automatically on merge by `.github/workflows/deploy.yml`). Materialized `triggers` table for O(1) feed reads; `principals`/`entity_principals` model the cross-LLC borrower graph.
+- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. Connectors are configured from the in-app admin settings (enable, vendor URL, AES-GCM-encrypted API key), retried 3× with backoff, audited in `ingestion_runs`, and idempotent on re-run.
+- **Data modes** — `demo` (seeded sample data, default) vs `live` (only ingested records). Toggle in Settings; purge sample rows once live.
 
 ## Develop
 
@@ -34,13 +35,23 @@ npm run worker:dev     # API on :8787 (optional; UI proxies /api → :8787)
 ## Provision & deploy
 
 ```bash
+npx wrangler login
 npx wrangler d1 create lienwolf-db          # put the id in worker/wrangler.toml
-npm run db:schema && npm run db:seed
+npm run db:migrate                          # apply migrations to remote D1
+npm run db:seed                             # optional: sample data for demo mode
+npx wrangler secret put ADMIN_TOKEN --config worker/wrangler.toml
 npx wrangler secret put WEBHOOK_SECRET --config worker/wrangler.toml
-# COUNTY_API_KEY / PERMIT_API_KEY / SKIP_TRACE_API_KEY once vendors are contracted
-npm run deploy:worker
-npm run deploy:pages
+npm run deploy                              # build UI + deploy Worker (assets + API)
 ```
+
+**Continuous deploy:** merges to `main` run `.github/workflows/deploy.yml` — type-check,
+build, `d1 migrations apply`, `wrangler deploy`. Add `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` repository secrets to enable it.
+
+**Going live:** open **Settings** in the app → save your `ADMIN_TOKEN` → configure each
+connector (vendor base URL + API key) → flip **Demo → Live** → optionally purge sample
+rows. The vendor payload contract each connector expects is documented at the top of
+`worker/src/ingest.ts`.
 
 ## API surface
 

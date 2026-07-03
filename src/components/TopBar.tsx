@@ -1,5 +1,7 @@
 import { useApp, type View } from "../store";
-import { IconMenu, IconMoon, IconSearch, IconSun } from "./icons";
+import { Menu } from "./ui";
+import { IconGear, IconMenu, IconMoon, IconSearch, IconSun } from "./icons";
+import { classNames } from "../lib/format";
 
 const TITLES: Record<View, { title: string; sub: string }> = {
   dashboard: { title: "Command Center", sub: "All high-intent borrowing signals, ranked" },
@@ -8,15 +10,25 @@ const TITLES: Record<View, { title: string; sub: string }> = {
   permit: { title: "Permit Intelligence", sub: "Ground-up & structural filings, matched to principals" },
   lien: { title: "Lien Monitoring", sub: "Fresh mechanics liens — frozen draws, rescue capital" },
   watchlist: { title: "Pipeline", sub: "Saved leads — watching through funded" },
-  settings: { title: "Settings", sub: "Markets, thresholds & pipeline" },
+  settings: { title: "Settings", sub: "Data sources, integrations & administration" },
 };
+
+const MODE_BADGE = {
+  demo: { label: "Demo data", tone: "border-warn/30 bg-warn/10 text-warn" },
+  live: { label: "Live", tone: "border-ok/30 bg-ok/10 text-ok" },
+  offline: { label: "Demo data", tone: "border-warn/30 bg-warn/10 text-warn" },
+} as const;
 
 export function TopBar() {
   const view = useApp((s) => s.view);
   const setMobileNav = useApp((s) => s.setMobileNav);
+  const setPalette = useApp((s) => s.setPalette);
+  const setView = useApp((s) => s.setView);
   const theme = useApp((s) => s.theme);
   const toggleTheme = useApp((s) => s.toggleTheme);
+  const dataMode = useApp((s) => s.dataMode);
   const t = TITLES[view];
+  const mode = MODE_BADGE[dataMode];
 
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-xl">
@@ -30,21 +42,43 @@ export function TopBar() {
         </button>
 
         <div className="min-w-0 flex-1">
-          <h1 className="truncate font-display text-[15px] font-bold tracking-tight text-tx1">
-            {t.title}
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="truncate font-display text-[15px] font-bold tracking-tight text-tx1">
+              {t.title}
+            </h1>
+            <span
+              className={classNames(
+                "hidden rounded-md border px-1.5 py-0.5 text-2xs font-medium sm:inline",
+                mode.tone
+              )}
+              title={
+                dataMode === "live"
+                  ? "Showing live records from connected data sources"
+                  : "Showing sample data — switch to live in Settings"
+              }
+            >
+              {mode.label}
+            </span>
+          </div>
           <p className="hidden truncate text-2xs text-tx3 sm:block">{t.sub}</p>
         </div>
 
-        {/* Search (visual affordance; wire to /api/search later) */}
-        <div className="hidden items-center gap-2 rounded-xl border border-line bg-raised/60 px-3 py-1.5 text-tx3 transition-colors focus-within:border-accent/40 md:flex">
+        {/* Search — opens the ⌘K palette */}
+        <button
+          onClick={() => setPalette(true)}
+          className="hidden items-center gap-2 rounded-xl border border-line bg-raised/60 px-3 py-1.5 text-tx3 transition-colors hover:border-tx3/40 md:flex"
+        >
           <IconSearch className="h-3.5 w-3.5" />
-          <input
-            placeholder="Search entities, addresses…"
-            className="w-40 bg-transparent text-xs text-tx1 placeholder:text-tx3 focus:outline-none xl:w-56"
-          />
+          <span className="w-40 text-left text-xs xl:w-56">Search entities, addresses…</span>
           <span className="kbd">⌘K</span>
-        </div>
+        </button>
+        <button
+          onClick={() => setPalette(true)}
+          className="rounded-lg p-2 text-tx2 hover:bg-raised md:hidden"
+          aria-label="Search"
+        >
+          <IconSearch className="h-4 w-4" />
+        </button>
 
         <button
           onClick={toggleTheme}
@@ -54,19 +88,42 @@ export function TopBar() {
           {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
         </button>
 
-        {/* Sync status + avatar */}
-        <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-1.5 text-2xs text-tx3 lg:flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-ok" />
-            Synced 8h ago
-          </div>
-          <span
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-line bg-raised text-xs font-semibold text-tx1"
-            title="Max · Allura Capital"
-          >
-            M
-          </span>
-        </div>
+        {/* Profile */}
+        <Menu
+          align="right"
+          button={
+            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-line bg-raised text-xs font-semibold text-tx1 transition-colors hover:border-tx3/40">
+              M
+            </span>
+          }
+          header={
+            <div>
+              <div className="text-xs font-semibold text-tx1">Max</div>
+              <div className="text-2xs text-tx3">max@alluraimports.com · Allura Capital</div>
+            </div>
+          }
+          items={[
+            {
+              label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+              icon: theme === "dark" ? <IconSun className="h-3.5 w-3.5" /> : <IconMoon className="h-3.5 w-3.5" />,
+              onSelect: toggleTheme,
+            },
+            {
+              label: "Settings",
+              icon: <IconGear className="h-3.5 w-3.5" />,
+              onSelect: () => setView("settings"),
+            },
+            {
+              label: "Sign out",
+              divider: true,
+              danger: true,
+              onSelect: () => {
+                localStorage.removeItem("lienwolf-ui");
+                window.location.reload();
+              },
+            },
+          ]}
+        />
       </div>
     </header>
   );

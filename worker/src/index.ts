@@ -27,6 +27,7 @@ export interface Env {
   PERMIT_API_KEY?: string;
   SKIP_TRACE_API_KEY?: string;
   WEBHOOK_SECRET?: string;
+  ADMIN_TOKEN?: string;
 }
 
 function corsHeaders(env: Env): Record<string, string> {

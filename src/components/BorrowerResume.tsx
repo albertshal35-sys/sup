@@ -12,6 +12,8 @@ import {
   IconX,
 } from "./icons";
 import { UrgencyPill } from "./primitives";
+import { DatePicker, TextField } from "./ui";
+import { IconChevronRight, IconPulse } from "./icons";
 
 /* ------------------------- CRM panel ------------------------- */
 
@@ -21,9 +23,15 @@ function CrmPanel({ entityId, entityName }: { entityId: string; entityName: stri
   const setLeadStage = useApp((s) => s.setLeadStage);
   const setLeadNote = useApp((s) => s.setLeadNote);
   const setLeadFollowUp = useApp((s) => s.setLeadFollowUp);
+  const setLeadValue = useApp((s) => s.setLeadValue);
   const [draftNote, setDraftNote] = useState(lead?.note ?? "");
+  const [draftValue, setDraftValue] = useState(lead?.dealValue != null ? String(lead.dealValue) : "");
 
   useEffect(() => setDraftNote(lead?.note ?? ""), [lead?.note, entityId]);
+  useEffect(
+    () => setDraftValue(lead?.dealValue != null ? String(lead.dealValue) : ""),
+    [lead?.dealValue, entityId]
+  );
 
   if (!lead) {
     return (
@@ -66,18 +74,29 @@ function CrmPanel({ entityId, entityName }: { entityId: string; entityName: stri
         ))}
       </div>
 
-      {/* Follow-up + note */}
-      <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-[170px_1fr]">
-        <label className="flex flex-col gap-1">
+      {/* Follow-up + deal size + note */}
+      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-[170px_140px_1fr]">
+        <div className="flex flex-col gap-1">
           <span className="text-2xs font-medium text-tx3">Next follow-up</span>
-          <input
-            type="date"
-            value={lead.followUp ?? ""}
-            onChange={(e) => setLeadFollowUp(entityId, e.target.value || null)}
-            className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs tabular-nums text-tx1 focus:border-accent/40 focus:outline-none"
+          <DatePicker
+            value={lead.followUp}
+            onChange={(date) => setLeadFollowUp(entityId, date)}
           />
-        </label>
-        <label className="flex flex-col gap-1">
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-2xs font-medium text-tx3">Deal size</span>
+          <TextField
+            value={draftValue}
+            onChange={setDraftValue}
+            onBlur={() => {
+              const n = Math.round(Number(draftValue.replace(/[$,\s]/g, "")));
+              setLeadValue(entityId, Number.isFinite(n) && n > 0 ? n : null);
+            }}
+            placeholder="850000"
+            className="tabular-nums"
+          />
+        </div>
+        <label className="col-span-2 flex flex-col gap-1 sm:col-span-1">
           <span className="text-2xs font-medium text-tx3">Notes</span>
           <textarea
             rows={2}
@@ -101,6 +120,58 @@ function CrmPanel({ entityId, entityName }: { entityId: string; entityName: stri
           ))}
         </ol>
       )}
+    </section>
+  );
+}
+
+/* --------------------- borrower network --------------------- */
+/* The same principal usually operates several LLCs. Surfacing the whole
+   book is how a lender learns the customer and wins repeat business
+   across every entity they control. */
+
+function NetworkSection({ network }: { network: BorrowerResumeType["network"] }) {
+  const openResume = useApp((s) => s.openResume);
+  if (!network || network.entities.length === 0) return null;
+
+  const combinedFlips = network.entities.reduce((s, e) => s + e.flips36mo, 0);
+  const combinedVolume = network.entities.reduce((s, e) => s + e.volume36mo, 0);
+
+  return (
+    <section className="mt-5">
+      <h3 className="mb-2 text-2xs font-medium text-tx3">Borrower Network</h3>
+      <div className="rounded-xl border border-violet/20 bg-violet/[0.05] p-3.5">
+        <div className="flex items-start gap-2">
+          <IconPulse className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet" />
+          <p className="text-xs text-tx2">
+            <strong className="font-semibold text-tx1">{network.principalName}</strong> also operates{" "}
+            {network.entities.length === 1 ? "another entity" : `${network.entities.length} other entities`} —{" "}
+            <span className="tabular-nums">
+              +{combinedFlips} flips · {money(combinedVolume)} additional volume
+            </span>{" "}
+            across the relationship. Win one deal, underwrite the whole book.
+          </p>
+        </div>
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          {network.entities.map((e) => (
+            <button
+              key={e.id}
+              onClick={() => void openResume(e.id)}
+              className="group flex w-full items-center gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-violet/40"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-tx1">{e.name}</span>
+                <span className="block text-2xs text-tx3">
+                  {e.role ?? "Principal"} · {e.flips36mo} flips · {money(e.volume36mo)} volume
+                </span>
+              </span>
+              <span className="rounded bg-raised px-1.5 py-0.5 text-2xs font-semibold tabular-nums text-tx2">
+                {e.velocityScore}
+              </span>
+              <IconChevronRight className="h-3.5 w-3.5 text-tx3 transition-transform group-hover:translate-x-0.5" />
+            </button>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
@@ -339,6 +410,8 @@ export function BorrowerResumeModal() {
           </div>
 
           <CrmPanel entityId={e.id} entityName={e.name} />
+
+          <NetworkSection network={resume.network} />
 
           {/* Active signals */}
           {resume.activeSignals.length > 0 && (
