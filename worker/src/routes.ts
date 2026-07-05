@@ -126,7 +126,7 @@ route("GET", "/api/health", async (_req, env) => {
 route("GET", "/api/kpis", async (_req, env) => {
   const mode = await getDataMode(env);
   const originFilter = mode === "live" ? "AND origin = 'live'" : "";
-  const [newLeads, expiring, cashPoor, liens, permits] = await Promise.all([
+  const [newLeads, expiring, cashPoor, liens, permits, flippers] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) c FROM triggers WHERE status = 'new' ${originFilter}`).first<{ c: number }>(),
     env.DB.prepare(
       `SELECT COUNT(*) c, COALESCE(SUM(l.principal),0) v FROM triggers t JOIN loans l ON l.id = t.ref_id
@@ -143,6 +143,9 @@ route("GET", "/api/kpis", async (_req, env) => {
     env.DB.prepare(
       `SELECT COALESCE(SUM(valuation),0) v FROM permits WHERE filed_at >= date('now','-30 days') ${originFilter}`
     ).first<{ v: number }>(),
+    env.DB.prepare(
+      `SELECT COUNT(*) c FROM entities WHERE velocity_score >= 85 ${originFilter}`
+    ).first<{ c: number }>(),
   ]);
   return json(
     {
@@ -151,6 +154,7 @@ route("GET", "/api/kpis", async (_req, env) => {
       cashPoorEntities: cashPoor?.c ?? 0,
       activeLiens: { count: liens?.c ?? 0, amount: liens?.v ?? 0 },
       permitValuation30d: permits?.v ?? 0,
+      highVelocityFlippers: flippers?.c ?? 0,
     },
     env
   );
@@ -546,6 +550,10 @@ route("POST", "/api/admin/purge-demo", async (_req, env) => {
         : await env.DB.prepare(`DELETE FROM ${t} WHERE origin = 'demo'`).run();
     deleted += res.meta.changes ?? 0;
   }
+  // Reset the infrastructure surfaces too — audit rows and source baselines
+  // restart from truth on the next real run.
+  await env.DB.prepare("DELETE FROM ingestion_runs").run();
+  await env.DB.prepare("DELETE FROM source_stats").run();
   return json({ ok: true, deleted }, env);
 });
 

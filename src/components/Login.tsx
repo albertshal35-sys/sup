@@ -25,7 +25,7 @@ export function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center px-4">
+    <div className="fixed inset-0 flex touch-none items-center justify-center overflow-hidden px-4">
       {/* quiet brand backdrop: hairline grid, no glow */}
       <div
         aria-hidden

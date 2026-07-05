@@ -202,21 +202,30 @@ export async function getFeed(kind: TriggerKind, mode: Mode = "offline"): Promis
   return mode === "demo" ? FEED_MOCKS[kind] : [];
 }
 
+const EMPTY_SPARKS: Kpis["sparks"] = {
+  newLeads: [], expiringLoans: [], cashPoor: [], liens: [], flippers: [],
+};
+
+const ZERO_KPIS: Kpis = {
+  newLeads: 0,
+  expiringLoans: { count: 0, principal: 0 },
+  cashPoorEntities: 0,
+  activeLiens: { count: 0, amount: 0 },
+  permitValuation30d: 0,
+  highVelocityFlippers: 0,
+  sparks: EMPTY_SPARKS,
+};
+
 export async function getKpis(mode: Mode = "offline"): Promise<Kpis> {
   if (mode === "offline") return mockKpis;
-  const live = await tryFetch<Omit<Kpis, "sparks" | "highVelocityFlippers">>("/kpis");
-  if (live) return { ...mockKpis, ...live };
-  return mode === "demo"
-    ? mockKpis
-    : {
-        ...mockKpis,
-        newLeads: 0,
-        expiringLoans: { count: 0, principal: 0 },
-        cashPoorEntities: 0,
-        activeLiens: { count: 0, amount: 0 },
-        permitValuation30d: 0,
-        highVelocityFlippers: 0,
-      };
+  const live = await tryFetch<Omit<Kpis, "sparks">>("/kpis");
+  if (live) {
+    // Server numbers only — never blend in sample values. Sparklines are
+    // decorative trend hints; demo mode borrows the sample shapes, live
+    // shows none until real history exists.
+    return { ...ZERO_KPIS, ...live, sparks: mode === "demo" ? mockKpis.sparks : EMPTY_SPARKS };
+  }
+  return mode === "demo" ? mockKpis : ZERO_KPIS;
 }
 
 export async function getIngestionStatus(mode: Mode = "offline"): Promise<IngestionRun[]> {

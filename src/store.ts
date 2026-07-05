@@ -36,6 +36,36 @@ export type View =
   | "watchlist"
   | "settings";
 
+/**
+ * Client-side URL routing: each view owns a path slug so deep links,
+ * back/forward, and refresh all land on the right tab. The Worker serves
+ * the SPA shell for every non-/api path, and the auth gate wraps every
+ * view identically — the URL only ever names a tab, never bypasses login.
+ */
+const VIEW_PATHS: Record<View, string> = {
+  dashboard: "/",
+  maturity: "/maturities",
+  cash_poor: "/cash-poor",
+  permit: "/permits",
+  lien: "/distress",
+  map: "/map",
+  lenders: "/lenders",
+  loanbook: "/loan-book",
+  watchlist: "/pipeline",
+  settings: "/settings",
+};
+
+function viewFromPath(path: string): View {
+  const clean = path.replace(/\/+$/, "") || "/";
+  const hit = (Object.entries(VIEW_PATHS) as Array<[View, string]>).find(([, p]) => p === clean);
+  return hit ? hit[0] : "dashboard";
+}
+
+function syncUrl(view: View) {
+  const path = VIEW_PATHS[view];
+  if (window.location.pathname !== path) window.history.pushState({ view }, "", path);
+}
+
 export type Theme = "dark" | "light";
 export type DataMode = "demo" | "live" | "offline";
 export type AuthState = "checking" | "locked" | "open";
@@ -127,7 +157,7 @@ function withActivity(lead: Lead, kind: LeadActivity["kind"], text: string): Lea
 export const useApp = create<AppState>()(
   persist(
     (set, get) => ({
-      view: "dashboard",
+      view: viewFromPath(window.location.pathname),
       mobileNavOpen: false,
       collapsed: false,
       theme: "light",
@@ -149,7 +179,10 @@ export const useApp = create<AppState>()(
       pipeline: {},
       dismissed: [],
 
-      setView: (view) => set({ view, mobileNavOpen: false }),
+      setView: (view) => {
+        syncUrl(view);
+        set({ view, mobileNavOpen: false });
+      },
       setMobileNav: (mobileNavOpen) => set({ mobileNavOpen }),
       toggleCollapsed: () => set({ collapsed: !get().collapsed }),
       toggleTheme: () => {
@@ -346,3 +379,8 @@ export function useBestSignal(entityId: string): TriggerItem | null {
     });
   return best;
 }
+
+// Back/forward buttons re-select the tab the URL names.
+window.addEventListener("popstate", () => {
+  useApp.setState({ view: viewFromPath(window.location.pathname), mobileNavOpen: false });
+});
