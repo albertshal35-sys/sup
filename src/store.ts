@@ -115,6 +115,9 @@ interface AppState {
 
   dismissTrigger: (id: string) => void;
   markContacted: (id: string) => void;
+
+  toasts: Array<{ id: number; text: string; tone: "ok" | "error" | "info" }>;
+  toast: (text: string, tone?: "ok" | "error" | "info") => void;
 }
 
 const emptyFeeds: Record<TriggerKind, TriggerItem[]> = {
@@ -178,6 +181,15 @@ export const useApp = create<AppState>()(
 
       pipeline: {},
       dismissed: [],
+
+      toasts: [],
+      toast: (text, tone = "ok") => {
+        const id = Date.now() + Math.random();
+        set({ toasts: [...get().toasts.slice(-3), { id, text, tone }] });
+        setTimeout(() => {
+          set({ toasts: get().toasts.filter((t) => t.id !== id) });
+        }, 3500);
+      },
 
       setView: (view) => {
         syncUrl(view);
@@ -258,10 +270,12 @@ export const useApp = create<AppState>()(
           delete next[entityId];
           set({ pipeline: next });
           void syncLeadRemove(entityId);
+          get().toast("Removed from pipeline", "info");
         } else {
           const lead = newLead(entityId, entityName ?? entityId);
           set({ pipeline: { ...pipeline, [entityId]: lead } });
           void syncLeadUpsert(lead);
+          get().toast("Saved to pipeline");
         }
       },
 

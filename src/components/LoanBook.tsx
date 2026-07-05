@@ -78,6 +78,7 @@ function EntryModal({
       setErr("Could not save — the Worker API is unreachable in offline preview.");
       return;
     }
+    useApp.getState().toast("Loan saved");
     onSaved();
     onClose();
   };
@@ -297,7 +298,10 @@ export function LoanBookView() {
                             danger: true,
                             divider: true,
                             onSelect: () => {
-                              void deleteLoanBookEntry(l.id).then(refresh);
+                              void deleteLoanBookEntry(l.id).then(() => {
+                                useApp.getState().toast("Loan deleted", "info");
+                                refresh();
+                              });
                             },
                           },
                         ]}

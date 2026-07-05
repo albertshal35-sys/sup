@@ -32,8 +32,10 @@ export async function runModel(env: Env, messages: ChatMessage[], maxTokens = 20
   const options = gatewayId ? { gateway: { id: gatewayId } } : undefined;
   const res = (await env.AI.run(model, { messages, max_tokens: maxTokens }, options)) as {
     response?: string;
+    choices?: Array<{ message?: { content?: string } }>;
   };
-  return res?.response ?? "";
+  // Workers AI models differ in response shape; accept both.
+  return res?.response ?? res?.choices?.[0]?.message?.content ?? "";
 }
 
 async function getSetting(env: Env, key: string): Promise<string | null> {
@@ -268,6 +270,17 @@ export async function generateOutreach(
  */
 export async function renderPageMarkdown(env: Env, url: string): Promise<string> {
   if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) throw new Error("browser_rendering_not_configured");
+  // Browser Rendering rate-limits bursts (429) — space retries out instead
+  // of failing the run.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await renderOnce(env, url);
+    if (result !== "RATE_LIMITED") return result;
+    await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+  }
+  throw new Error("browser_rendering 429 — rate limited after 3 attempts; scrape runs are spaced out on the next cron");
+}
+
+async function renderOnce(env: Env, url: string): Promise<string> {
   const res = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/browser-rendering/markdown`,
     {
@@ -282,7 +295,11 @@ export async function renderPageMarkdown(env: Env, url: string): Promise<string>
       }),
     }
   );
-  if (!res.ok) throw new Error(`browser_rendering ${res.status}`);
+  if (res.status === 429) return "RATE_LIMITED";
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 220);
+    throw new Error(`browser_rendering ${res.status}${res.status === 403 ? " — the CLOUDFLARE_API_TOKEN likely lacks the Browser Rendering: Edit permission" : ""}${body ? ` — ${body}` : ""}`);
+  }
   const body = (await res.json()) as { success: boolean; result?: string };
   if (!body.success || !body.result) throw new Error("browser_rendering_empty");
   return body.result;
