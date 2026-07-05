@@ -1,9 +1,10 @@
-import { useApp } from "../store";
+import { useApp, type View } from "../store";
 import { money } from "../lib/format";
 import { Sparkline } from "./Sparkline";
 
 interface KpiDef {
   id: string;
+  view: View;
   label: string;
   value: (k: NonNullable<ReturnType<typeof selectKpis>>) => string;
   sub: (k: NonNullable<ReturnType<typeof selectKpis>>) => string;
@@ -16,6 +17,7 @@ const selectKpis = (s: ReturnType<typeof useApp.getState>) => s.kpis;
 const KPIS: KpiDef[] = [
   {
     id: "leads",
+    view: "dashboard",
     label: "New Leads",
     value: (k) => String(k.newLeads),
     sub: () => "last 24h across all feeds",
@@ -24,6 +26,7 @@ const KPIS: KpiDef[] = [
   },
   {
     id: "expiring",
+    view: "maturity",
     label: "Expiring Loans",
     value: (k) => String(k.expiringLoans.count),
     sub: (k) => `${money(k.expiringLoans.principal)} principal in window`,
@@ -32,6 +35,7 @@ const KPIS: KpiDef[] = [
   },
   {
     id: "cashpoor",
+    view: "cash_poor",
     label: "Cash-Poor Buyers",
     value: (k) => String(k.cashPoorEntities),
     sub: () => "≥2 cash buys · 60 days",
@@ -40,6 +44,7 @@ const KPIS: KpiDef[] = [
   },
   {
     id: "liens",
+    view: "lien",
     label: "Active Liens",
     value: (k) => String(k.activeLiens.count),
     sub: (k) => `${money(k.activeLiens.amount)} claimed`,
@@ -48,6 +53,7 @@ const KPIS: KpiDef[] = [
   },
   {
     id: "flippers",
+    view: "lenders",
     label: "High-Velocity Flippers",
     value: (k) => String(k.highVelocityFlippers),
     sub: () => "velocity score ≥ 85",
@@ -58,13 +64,16 @@ const KPIS: KpiDef[] = [
 
 export function KpiStrip() {
   const kpis = useApp((s) => s.kpis);
+  const setView = useApp((s) => s.setView);
 
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 xl:grid-cols-5">
       {KPIS.map((def, i) => (
-        <div
+        <button
           key={def.id}
-          className="card animate-fade-up px-4 py-3.5 last:col-span-2 sm:last:col-span-1"
+          onClick={() => setView(def.view)}
+          title={`Open ${def.label}`}
+          className="card card-hover animate-fade-up px-4 py-3.5 text-left last:col-span-2 sm:last:col-span-1"
           style={{ animationDelay: `${i * 40}ms` }}
         >
           {kpis ? (
@@ -78,16 +87,18 @@ export function KpiStrip() {
                     {def.value(kpis)}
                   </div>
                 </div>
-                <div className={"hidden shrink-0 pt-1 sm:block " + def.colorClass}>
-                  <Sparkline data={def.spark(kpis)} id={def.id} />
-                </div>
+                {def.spark(kpis).some((v) => v > 0) && (
+                  <div className={"hidden shrink-0 pt-1 sm:block " + def.colorClass}>
+                    <Sparkline data={def.spark(kpis)} id={def.id} />
+                  </div>
+                )}
               </div>
               <div className="mt-1 truncate text-2xs text-tx3">{def.sub(kpis)}</div>
             </>
           ) : (
             <div className="h-[68px] animate-pulse rounded-lg bg-raised/60" />
           )}
-        </div>
+        </button>
       ))}
     </div>
   );

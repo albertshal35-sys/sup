@@ -168,12 +168,14 @@ Connectors come **pre-filled with real endpoints** (seeded by migration
 | Corp registry | `data.ny.gov/resource/n9v6-gdp6.json` | NYS Active Corporations |
 | Deeds / loans / satisfactions | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | ACRIS Real Property Master — see caveat below |
 
-**ACRIS caveat:** the Master dataset carries document type, amount and date,
-but party *names* live in ACRIS Parties (`636b-3b5g`) and property
-*addresses* in ACRIS Legals (`8h5j-fqxa`), joined by `document_id`. Until
-you use a joined feed or scrape the ACRIS search UI, master-only rows lack
-names/addresses and will quarantine rather than pollute your data. Filter
-document types with the field-map's `where` (e.g. `doc_type = 'MTGE'`).
+**ACRIS is joined natively:** the pipeline automatically joins Master
+(amounts/dates) with Legals (`8h5j-fqxa`, addresses) and Parties
+(`636b-3b5g`, names) by `document_id`, producing complete deed, mortgage,
+and satisfaction records from the free city APIs — no field map needed for
+these three connectors. Document types default to `DEED` / `MTGE`+`AGMT` /
+`SAT` (override via the field-map `where`). Lenders are auto-classified
+bank vs private by name, and all-cash purchases are detected by
+reconciling deeds against mortgage recordings on the same parcel.
 Scrape-mode connectors (lis pendens, auctions, UCC, borough liens) are
 seeded with the relevant portal URLs — swap in the results page for your
 borough/search.

@@ -117,37 +117,39 @@ function FilterBar({
   count: number;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
       <TextField
         value={filters.query}
         onChange={(query) => setFilters({ ...filters, query })}
         placeholder="Filter by name, principal, address…"
-        className="max-w-xs"
+        className="w-full sm:max-w-xs"
       />
-      <Select
-        size="sm"
-        className="w-44"
-        value={filters.market}
-        options={markets}
-        onChange={(market) => setFilters({ ...filters, market })}
-      />
-      <Select
-        size="sm"
-        className="w-36"
-        value={filters.urgency}
-        options={URGENCY_OPTIONS}
-        onChange={(urgency) => setFilters({ ...filters, urgency })}
-      />
-      <Select
-        size="sm"
-        className="w-44"
-        value={filters.sort}
-        options={SORT_OPTIONS}
-        onChange={(sort) => setFilters({ ...filters, sort })}
-      />
-      <span className="ml-auto text-2xs tabular-nums text-tx3">
-        {count} result{count === 1 ? "" : "s"}
-      </span>
+      <div className="grid grid-cols-2 gap-2 sm:contents">
+        <Select
+          size="sm"
+          className="w-full sm:w-44"
+          value={filters.market}
+          options={markets}
+          onChange={(market) => setFilters({ ...filters, market })}
+        />
+        <Select
+          size="sm"
+          className="w-full sm:w-36"
+          value={filters.urgency}
+          options={URGENCY_OPTIONS}
+          onChange={(urgency) => setFilters({ ...filters, urgency })}
+        />
+        <Select
+          size="sm"
+          className="w-full sm:w-44"
+          value={filters.sort}
+          options={SORT_OPTIONS}
+          onChange={(sort) => setFilters({ ...filters, sort })}
+        />
+        <span className="self-center justify-self-end text-2xs tabular-nums text-tx3 sm:ml-auto">
+          {count} result{count === 1 ? "" : "s"}
+        </span>
+      </div>
     </div>
   );
 }

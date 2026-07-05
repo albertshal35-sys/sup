@@ -20,6 +20,7 @@ import {
   isSocrataUrl,
   RECORD_CONNECTORS,
 } from "./ingest";
+import { acrisCapable, isAcrisMaster } from "./acris";
 
 export const BACKFILL_MONTHS = 36;
 const CHUNKS_PER_CRON = 2; // connectors advanced per scheduled run
@@ -33,8 +34,9 @@ function monthShift(iso: string, months: number): string {
 export async function backfillEligible(env: Env, id: string): Promise<boolean> {
   if (!RECORD_CONNECTORS[id]) return false;
   const cfg = await getConnectorConfig(env, id);
-  return cfg.enabled && cfg.mode === "api" && Boolean(cfg.baseUrl) &&
-    (!isSocrataUrl(cfg.baseUrl) || Boolean(cfg.fieldMap?.dateField));
+  if (!cfg.enabled || cfg.mode !== "api" || !cfg.baseUrl) return false;
+  if (isAcrisMaster(cfg.baseUrl) && acrisCapable(id)) return true; // join needs no field map
+  return !isSocrataUrl(cfg.baseUrl) || Boolean(cfg.fieldMap?.dateField);
 }
 
 /** Start (or restart) a connector's crawl from today back to -36 months. */

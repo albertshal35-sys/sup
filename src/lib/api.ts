@@ -102,6 +102,32 @@ export async function loginWithCode(
   }
 }
 
+/** On-demand Apollo enrichment for one borrower (credits spent only on click). */
+export async function enrichEntity(entityId: string): Promise<
+  | { ok: true; contacts: ResumeContactShape[]; principalLinked: string | null }
+  | { ok: false; error: string }
+> {
+  try {
+    const res = await fetch(`/api/entities/${entityId}/enrich`, { method: "POST", headers: authHeaders() });
+    const body = (await res.json().catch(() => ({}))) as {
+      contacts?: Array<{ name: string; title: string | null; phone: string | null; email: string | null; linkedin: string | null; confidence: number }>;
+      principalLinked?: string | null; error?: string;
+    };
+    if (!res.ok) return { ok: false, error: body.error ?? String(res.status) };
+    return {
+      ok: true,
+      principalLinked: body.principalLinked ?? null,
+      contacts: (body.contacts ?? []).map((c) => ({
+        name: c.name, title: c.title, phone: c.phone, email: c.email, linkedin: c.linkedin,
+        source: "apollo", confidence: c.confidence, verifiedAt: new Date().toISOString().slice(0, 10),
+      })),
+    };
+  } catch {
+    return { ok: false, error: "offline" };
+  }
+}
+type ResumeContactShape = import("../types").ResumeContact;
+
 /** Personalized outreach draft from the borrower's records. */
 export async function fetchOutreach(
   entityId: string,
@@ -202,21 +228,30 @@ export async function getFeed(kind: TriggerKind, mode: Mode = "offline"): Promis
   return mode === "demo" ? FEED_MOCKS[kind] : [];
 }
 
+const EMPTY_SPARKS: Kpis["sparks"] = {
+  newLeads: [], expiringLoans: [], cashPoor: [], liens: [], flippers: [],
+};
+
+const ZERO_KPIS: Kpis = {
+  newLeads: 0,
+  expiringLoans: { count: 0, principal: 0 },
+  cashPoorEntities: 0,
+  activeLiens: { count: 0, amount: 0 },
+  permitValuation30d: 0,
+  highVelocityFlippers: 0,
+  sparks: EMPTY_SPARKS,
+};
+
 export async function getKpis(mode: Mode = "offline"): Promise<Kpis> {
   if (mode === "offline") return mockKpis;
-  const live = await tryFetch<Omit<Kpis, "sparks" | "highVelocityFlippers">>("/kpis");
-  if (live) return { ...mockKpis, ...live };
-  return mode === "demo"
-    ? mockKpis
-    : {
-        ...mockKpis,
-        newLeads: 0,
-        expiringLoans: { count: 0, principal: 0 },
-        cashPoorEntities: 0,
-        activeLiens: { count: 0, amount: 0 },
-        permitValuation30d: 0,
-        highVelocityFlippers: 0,
-      };
+  const live = await tryFetch<Omit<Kpis, "sparks">>("/kpis");
+  if (live) {
+    // Server numbers only — never blend in sample values. Sparklines are
+    // decorative trend hints; demo mode borrows the sample shapes, live
+    // shows none until real history exists.
+    return { ...ZERO_KPIS, ...live, sparks: mode === "demo" ? mockKpis.sparks : EMPTY_SPARKS };
+  }
+  return mode === "demo" ? mockKpis : ZERO_KPIS;
 }
 
 export async function getIngestionStatus(mode: Mode = "offline"): Promise<IngestionRun[]> {

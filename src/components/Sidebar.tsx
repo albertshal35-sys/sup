@@ -232,10 +232,10 @@ export function Sidebar() {
       {mobileNavOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            className="absolute inset-0 animate-fade-in bg-black/40 backdrop-blur-sm"
             onClick={() => setMobileNav(false)}
           />
-          <aside className="absolute inset-y-0 left-0 w-64 animate-scale-in border-r border-line bg-surface">
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-slide-in-left border-r border-line bg-surface shadow-pop">
             <button
               onClick={() => setMobileNav(false)}
               className="absolute right-3 top-4 rounded-lg p-1.5 text-tx2 hover:bg-raised"

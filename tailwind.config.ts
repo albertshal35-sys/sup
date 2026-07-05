@@ -51,6 +51,8 @@ export default {
         "fade-up": "fadeUp 0.35s cubic-bezier(0.22,1,0.36,1) both",
         "scale-in": "scaleIn 0.25s cubic-bezier(0.22,1,0.36,1) both",
         "pulse-dot": "pulseDot 2.4s ease-in-out infinite",
+        "slide-in-left": "slideInLeft 0.28s cubic-bezier(0.22,1,0.36,1) both",
+        "fade-in": "fadeIn 0.22s ease-out both",
       },
       keyframes: {
         fadeUp: {
@@ -64,6 +66,14 @@ export default {
         pulseDot: {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.35" },
+        },
+        slideInLeft: {
+          from: { opacity: "0.6", transform: "translateX(-100%)" },
+          to: { opacity: "1", transform: "translateX(0)" },
+        },
+        fadeIn: {
+          from: { opacity: "0" },
+          to: { opacity: "1" },
         },
       },
     },
