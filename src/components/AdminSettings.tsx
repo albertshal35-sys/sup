@@ -86,11 +86,12 @@ function SetupGuideModal({ open, onClose }: { open: boolean; onClose: () => void
           with the code gets in; it also encrypts stored vendor keys.
         </GuideStep>
         <GuideStep n={2} title="Enable the headless browser (scraping)">
-          Scrape mode uses Cloudflare Browser Rendering — a managed headless Chrome fleet. Create an
-          API token in the Cloudflare dashboard with the <em>Browser Rendering: Edit</em>{" "}
-          permission, then <Code>npx wrangler secret put CF_API_TOKEN</Code> and set{" "}
-          <Code>CF_ACCOUNT_ID</Code> under <Code>[vars]</Code> in <Code>worker/wrangler.toml</Code>.
-          Redeploy. The status line in the AI pipeline card below confirms when it's active.
+          Scrape mode uses Cloudflare Browser Rendering — a managed headless Chrome fleet. It
+          reuses the same <Code>CLOUDFLARE_API_TOKEN</Code> + <Code>CLOUDFLARE_ACCOUNT_ID</Code>{" "}
+          GitHub secrets that power deploys (the workflow injects both into the Worker
+          automatically) — just make sure the token also has the{" "}
+          <em>Browser Rendering: Edit</em> permission, then redeploy. The status line in the AI
+          pipeline card below confirms when it's active.
         </GuideStep>
         <GuideStep n={3} title="Route AI through your Gateway">
           Workers AI ships with the deploy (model <Code>@cf/moonshotai/kimi-k2.6</Code>). In the
@@ -1029,7 +1030,7 @@ export function SettingsView() {
                 ? "Workers AI binding active."
                 : "Deploy the Worker to activate the AI binding."}
               {serverSettings && !serverSettings.scrapingConfigured && (
-                <> Scraping needs CF_ACCOUNT_ID + CF_API_TOKEN (Browser Rendering) on the Worker.</>
+                <> Scraping needs the CLOUDFLARE_API_TOKEN with Browser Rendering permission — see the setup guide.</>
               )}
             </div>
           </div>

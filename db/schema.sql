@@ -424,3 +424,18 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   error         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ingestion_recent ON ingestion_runs(started_at DESC);
+
+-- ------------------------------------------------------------
+-- Default NYC source endpoints for fresh installs (mirrors
+-- migration 0006; connectors stay disabled until enabled).
+-- ------------------------------------------------------------
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/w9ak-ipjd.json' WHERE id='permits' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/6bgk-3dad.json' WHERE id='violations' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/9rz4-mjek.json' WHERE id='tax_liens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.ny.gov/resource/n9v6-gdp6.json' WHERE id='corp_registry' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json' WHERE id IN ('county_deeds','county_loans','satisfactions') AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://iapps.courts.state.ny.us/webcivil/ecourtsMain' WHERE id='lis_pendens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://www.nycourts.gov/courts/2jd/kings/civil/foreclosures.shtml' WHERE id='auctions' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame' WHERE id='ucc_filings' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType' WHERE id='liens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://api.apollo.io/v1' WHERE id='skip_trace' AND base_url IS NULL AND scrape_url IS NULL;

@@ -52,8 +52,7 @@ build, `d1 migrations apply`, `wrangler deploy`. Add `CLOUDFLARE_API_TOKEN` and
 and share the code with your team. It doubles as the encryption key for stored vendor keys.
 
 **Going live:** live data is the default. Open **Settings** → configure each data source —
-**Scrape** mode points a Cloudflare headless browser (Browser Rendering; needs `CF_ACCOUNT_ID`
-var + `CF_API_TOKEN` secret) at recorder/permit portals and Workers AI
+**Scrape** mode points a Cloudflare headless browser (Browser Rendering; reuses the CI `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` — the deploy workflow injects both into the Worker) at recorder/permit portals and Workers AI
 (`@cf/moonshotai/kimi-k2.6`, routed through your AI Gateway for centralized billing) extracts
 clean records; **API** mode takes a vendor base URL + key (contract documented at the top of
 `worker/src/ingest.ts`). Contact enrichment is Apollo-compatible. Suggested portals for each

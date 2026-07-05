@@ -55,7 +55,7 @@ export interface ConnectorCfg {
   scrapeUrl: string | null;
   notes: string | null;
   apiKey: string | null;
-  fieldMap: { dateField?: string; map?: Record<string, string> } | null;
+  fieldMap: { dateField?: string; where?: string; map?: Record<string, string> } | null;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -156,8 +156,10 @@ export function isSocrataUrl(url: string | null): boolean {
 
 /**
  * Fetch a date window from a Socrata resource and translate rows through
- * the connector's field map: { dateField, map: { ourField: theirField } }.
- * Map values starting with "=" are constants (e.g. "state": "=NY").
+ * the connector's field map: { dateField, where?, map: { ourField: theirField } }.
+ * Map values starting with "=" are constants (e.g. "state": "=NY"); the
+ * optional `where` is ANDed into the SoQL query — how ACRIS-style datasets
+ * get filtered to the right document types (e.g. "doc_type = 'MTGE'").
  */
 export async function socrataFetch(
   cfg: ConnectorCfg,
@@ -166,8 +168,9 @@ export async function socrataFetch(
 ): Promise<{ raw: string; rows: Record<string, unknown>[] }> {
   if (!cfg.fieldMap?.dateField || !cfg.fieldMap.map) throw new Error("field_map_missing");
   const dateField = cfg.fieldMap.dateField.replace(/[^a-z0-9_]/gi, "");
+  const extra = cfg.fieldMap.where?.replace(/;/g, "").trim();
   const params = new URLSearchParams({
-    $where: `${dateField} >= '${window.from}' AND ${dateField} < '${window.to}'`,
+    $where: `${dateField} >= '${window.from}' AND ${dateField} < '${window.to}'${extra ? ` AND (${extra})` : ""}`,
     $limit: String(limit),
     $order: `${dateField} DESC`,
   });
