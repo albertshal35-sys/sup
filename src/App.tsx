@@ -18,6 +18,7 @@ import { LoginPage } from "./components/Login";
 import { MapView } from "./components/MapView";
 import { LendersView } from "./components/Lenders";
 import { LoanBookView } from "./components/LoanBook";
+import { Toaster } from "./components/Toaster";
 
 export default function App() {
   const view = useApp((s) => s.view);
@@ -60,6 +61,7 @@ export default function App() {
 
       <BorrowerResumeModal />
       <CommandPalette />
+      <Toaster />
     </div>
   );
 }

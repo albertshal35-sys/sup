@@ -438,7 +438,10 @@ async function adminFetch<T>(
       },
     });
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) return { ok: false, error: String(body.error ?? res.status) };
+    if (!res.ok) {
+      const detail = typeof body.detail === "string" && body.detail ? ` — ${body.detail}` : "";
+      return { ok: false, error: `${String(body.error ?? res.status)}${detail}` };
+    }
     return { ok: true, data: body as T };
   } catch {
     return { ok: false, error: "api_unreachable" };

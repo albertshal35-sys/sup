@@ -1006,7 +1006,9 @@ route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => 
   if (!sampleRes.ok) return json({ error: `sample_fetch_${sampleRes.status}` }, env, 502);
   const sample = (await sampleRes.text()).slice(0, 12_000);
 
-  const text = await runModel(
+  let text: string;
+  try {
+    text = await runModel(
     env,
     [
       {
@@ -1022,10 +1024,15 @@ route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => 
     ],
     1024
   );
+  } catch (err) {
+    return json({ error: "automap_failed", detail: String(err instanceof Error ? err.message : err).slice(0, 200) }, env, 502);
+  }
   const cleaned = text.replace(/```(?:json)?/g, "").trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end <= start) return json({ error: "automap_failed" }, env, 502);
+  if (start === -1 || end <= start) {
+    return json({ error: "automap_failed", detail: `model returned no JSON object: ${cleaned.slice(0, 140) || "(empty response)"}` }, env, 502);
+  }
   let mapping: unknown;
   try {
     mapping = JSON.parse(cleaned.slice(start, end + 1));

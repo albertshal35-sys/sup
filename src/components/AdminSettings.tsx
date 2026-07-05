@@ -232,6 +232,7 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
   const save = async (patch: Parameters<typeof admin.saveConnector>[1]) => {
     setBusy(true);
     const res = await admin.saveConnector(connector.id, patch);
+    useApp.getState().toast(res.ok ? "Connector saved" : res.error, res.ok ? "ok" : "error");
     setNote(res.ok ? "Saved" : `Error: ${res.error}`);
     setBusy(false);
     if (res.ok) {
@@ -539,9 +540,14 @@ export function SettingsView() {
     void refresh();
   }, [refresh]);
 
+  const toast = useApp.getState().toast;
   const flash = (msg: string) => {
-    setBanner(msg);
-    setTimeout(() => setBanner(null), 3000);
+    const isError = /error|fail|could not|invalid/i.test(msg);
+    toast(msg, isError ? "error" : "ok");
+    if (isError) {
+      setBanner(msg);
+      setTimeout(() => setBanner(null), 5000);
+    }
   };
 
   const switchMode = async (live: boolean) => {
