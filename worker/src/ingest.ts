@@ -35,6 +35,7 @@ import { rescoreTriggers } from "./scoring";
 import { extractRecords, renderPageMarkdown, verifyGrounding } from "./ai";
 import { maybeSendDigest } from "./alerts";
 import { gateRecords, recordSourceStats, corroborate, type Provenance } from "./integrity";
+import { acrisCapable, acrisFetch, isAcrisMaster } from "./acris";
 import { evaluateCustomSignals } from "./signals";
 import { generateMergeSuggestions } from "./resolution";
 
@@ -536,8 +537,13 @@ export async function acquireAndIngest(
     method = "api";
     confidence = "direct";
     sourceUrl = cfg.baseUrl;
-    if (isSocrataUrl(cfg.baseUrl)) {
-      const w = window ?? { from: sinceDate(), to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10) };
+    const w = window ?? { from: sinceDate(), to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10) };
+    if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
+      // NYC ACRIS: native three-dataset join (Master + Legals + Parties).
+      const result = await acrisFetch(env, cfg, w);
+      raw = result.raw;
+      rows = result.rows;
+    } else if (isSocrataUrl(cfg.baseUrl)) {
       const result = await socrataFetch(cfg, w);
       raw = result.raw;
       rows = result.rows;

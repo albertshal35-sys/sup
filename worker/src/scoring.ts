@@ -17,9 +17,14 @@
  */
 
 import type { Env } from "./index";
+import { recomputeCashFlags } from "./acris";
 
 export async function rescoreTriggers(env: Env): Promise<number> {
   let emitted = 0;
+
+  // ACRIS deeds land as cash-until-proven-financed; reconcile against the
+  // latest mortgage pulls before the cash-poor rule reads them.
+  await recomputeCashFlags(env);
 
   /* 1 — Upcoming Maturity Sniffer */
   const maturities = await env.DB.prepare(
