@@ -560,45 +560,33 @@ export async function acquireAndIngest(
   return { ingested, skipped: skipped + quarantined + groundingQuarantined, checksum: await sha256Hex(raw) };
 }
 
-/** Contact enrichment (Apollo-compatible API). */
-async function runSkipTrace(env: Env, cfg: ConnectorCfg): Promise<ConnectorResult> {
-  if (!cfg.baseUrl) throw new Error("base_url_missing");
+/**
+ * Manual "Run now" on the enrichment connector: enrich the top 5 open-signal
+ * borrowers that still lack a confident contact — bounded, never scheduled.
+ * (Per-borrower enrichment lives on the resume's Enrich button.)
+ */
+async function runSkipTrace(env: Env, _cfg: ConnectorCfg): Promise<ConnectorResult> {
+  const { enrichEntity } = await import("./apollo"); // dynamic import avoids a circular module init
   const targets = await env.DB.prepare(
-    `SELECT DISTINCT e.id, e.name FROM triggers t
+    `SELECT DISTINCT e.id FROM triggers t
      JOIN entities e ON e.id = t.entity_id
      WHERE t.status NOT IN ('dismissed','converted')
        AND NOT EXISTS (
          SELECT 1 FROM contacts c WHERE c.entity_id = e.id AND c.confidence >= 0.8
        )
-     LIMIT 50`
-  ).all<{ id: string; name: string }>();
-  if (targets.results.length === 0) return { ingested: 0, skipped: 0, checksum: null };
-
-  const raw = await vendorFetch(`${cfg.baseUrl}/trace`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(cfg) },
-    body: JSON.stringify({ names: targets.results.map((t) => t.name) }),
-  });
-  const rows = JSON.parse(raw) as Array<{
-    entityName: string; contactName: string; title?: string; phone?: string;
-    email?: string; linkedin?: string; confidence: number;
-  }>;
+     ORDER BY t.score DESC
+     LIMIT 5`
+  ).all<{ id: string }>();
   let ingested = 0, skipped = 0;
-  for (const r of rows) {
-    const entity = targets.results.find((t) => normalizeName(t.name) === normalizeName(r.entityName));
-    if (!entity) { skipped++; continue; }
-    await env.DB.prepare(
-      `INSERT INTO contacts (id, entity_id, name, title, phone, email, linkedin, source, confidence, verified_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'skip_trace', ?8, date('now'))`
-    )
-      .bind(
-        `con_${crypto.randomUUID().slice(0, 12)}`, entity.id, r.contactName, r.title ?? null,
-        r.phone ?? null, r.email ?? null, r.linkedin ?? null, r.confidence
-      )
-      .run();
-    ingested++;
+  for (const t of targets.results) {
+    const res = await enrichEntity(env, t.id);
+    if (res.ok && res.contacts.length > 0) ingested += res.contacts.length;
+    else skipped++;
+    if (!res.ok && (res.error === "apollo_key_missing" || res.error === "apollo_key_rejected")) {
+      throw new Error(res.error);
+    }
   }
-  return { ingested, skipped, checksum: await sha256Hex(raw) };
+  return { ingested, skipped, checksum: null };
 }
 
 export const CONNECTOR_IDS = [
@@ -674,6 +662,7 @@ export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promis
   const markets = await getMarkets(env);
 
   for (const id of CONNECTOR_IDS) {
+    if (id === "skip_trace") continue; // Apollo enrichment is on-demand only — credits are never spent in bulk
     const cfg = await getConnectorConfig(env, id);
     if (!connectorRunnable(cfg)) continue; // not yet configured — skip silently
     await runWithAudit(env, id, () => runConnector(env, cfg, markets));

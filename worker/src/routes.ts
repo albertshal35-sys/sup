@@ -10,6 +10,7 @@ import { authConfigured, loginWithCode, verifySession } from "./auth";
 import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, recordShape, runModel } from "./ai";
 import { sendTestDigest } from "./alerts";
 import { dataQualitySummary } from "./integrity";
+import { enrichEntity } from "./apollo";
 import { applyMerge } from "./resolution";
 import { backfillEligible, backfillStatus, runBackfillChunk, startBackfill } from "./backfill";
 import type { Provenance } from "./integrity";
@@ -627,6 +628,17 @@ route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
   } catch (err) {
     return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
   }
+});
+
+/* ------------------------ on-demand Apollo enrichment ------------------------ */
+
+route("POST", "/api/entities/:id/enrich", async (_req, env, params) => {
+  const result = await enrichEntity(env, params.id);
+  if (!result.ok) {
+    const status = result.error === "not_found" ? 404 : result.error === "apollo_key_missing" ? 409 : 502;
+    return json({ error: result.error }, env, status);
+  }
+  return json(result, env);
 });
 
 /* ------------------------ data quality (Settings) ------------------------ */

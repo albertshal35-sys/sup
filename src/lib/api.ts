@@ -102,6 +102,32 @@ export async function loginWithCode(
   }
 }
 
+/** On-demand Apollo enrichment for one borrower (credits spent only on click). */
+export async function enrichEntity(entityId: string): Promise<
+  | { ok: true; contacts: ResumeContactShape[]; principalLinked: string | null }
+  | { ok: false; error: string }
+> {
+  try {
+    const res = await fetch(`/api/entities/${entityId}/enrich`, { method: "POST", headers: authHeaders() });
+    const body = (await res.json().catch(() => ({}))) as {
+      contacts?: Array<{ name: string; title: string | null; phone: string | null; email: string | null; linkedin: string | null; confidence: number }>;
+      principalLinked?: string | null; error?: string;
+    };
+    if (!res.ok) return { ok: false, error: body.error ?? String(res.status) };
+    return {
+      ok: true,
+      principalLinked: body.principalLinked ?? null,
+      contacts: (body.contacts ?? []).map((c) => ({
+        name: c.name, title: c.title, phone: c.phone, email: c.email, linkedin: c.linkedin,
+        source: "apollo", confidence: c.confidence, verifiedAt: new Date().toISOString().slice(0, 10),
+      })),
+    };
+  } catch {
+    return { ok: false, error: "offline" };
+  }
+}
+type ResumeContactShape = import("../types").ResumeContact;
+
 /** Personalized outreach draft from the borrower's records. */
 export async function fetchOutreach(
   entityId: string,

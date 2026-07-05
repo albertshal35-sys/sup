@@ -14,7 +14,7 @@ import {
 import { UrgencyPill } from "./primitives";
 import { DatePicker, TextField } from "./ui";
 import { IconChevronRight, IconPulse } from "./icons";
-import { fetchAiBrief, fetchOutreach } from "../lib/api";
+import { enrichEntity, fetchAiBrief, fetchOutreach } from "../lib/api";
 import { Copy, FileText, Send, Sparkles } from "lucide-react";
 import { Select } from "./ui";
 import { QuoteModal } from "./QuoteModal";
@@ -486,6 +486,66 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
+/**
+ * On-demand Apollo enrichment — one click, one borrower, credits spent only
+ * when you ask. A match also links the person into the cross-LLC network,
+ * so enriching two shells owned by the same operator connects them.
+ */
+function EnrichButton({ entityId, hasContact }: { entityId: string; hasContact: boolean }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "empty" | "error">("idle");
+  const [note, setNote] = useState<string | null>(null);
+
+  const run = async () => {
+    setState("loading");
+    const res = await enrichEntity(entityId);
+    if (!res.ok) {
+      setState("error");
+      setNote(
+        res.error === "apollo_key_missing"
+          ? "Add your Apollo API key in Settings → Data sources → Enrichment first."
+          : `Apollo error: ${res.error}`
+      );
+      return;
+    }
+    if (res.contacts.length === 0) {
+      setState("empty");
+      setNote("No Apollo match for this entity — small LLCs are often off-network.");
+      return;
+    }
+    // Surface the fresh contacts immediately on the open resume.
+    const { resume } = useApp.getState();
+    if (resume?.entity.id === entityId) {
+      useApp.setState({ resume: { ...resume, contacts: [...res.contacts, ...resume.contacts] } });
+    }
+    setState("done");
+    setNote(
+      res.principalLinked
+        ? `Matched ${res.principalLinked} — linked into the borrower network.`
+        : `${res.contacts.length} contact${res.contacts.length === 1 ? "" : "s"} added.`
+    );
+  };
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {state !== "done" && (
+        <button
+          onClick={() => void run()}
+          disabled={state === "loading"}
+          className="flex items-center gap-1.5 rounded-lg border border-violet/30 bg-violet/10 px-2.5 py-1 text-xs font-medium text-violet transition-colors hover:bg-violet/20 disabled:opacity-50"
+        >
+          <Sparkles strokeWidth={1.75} className="h-3 w-3" />
+          {state === "loading" ? "Matching…" : hasContact ? "Re-enrich (Apollo)" : "Enrich contacts (Apollo)"}
+        </button>
+      )}
+      {note && (
+        <span className={"text-2xs " + (state === "error" ? "text-danger" : state === "empty" ? "text-tx3" : "text-ok")}>
+          {note}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function BorrowerResumeModal() {
   const resume = useApp((s) => s.resume);
   const open = useApp((s) => s.resumeOpen);
@@ -559,11 +619,12 @@ export function BorrowerResumeModal() {
                   </a>
                 )}
                 <span className="text-2xs text-tx3">
-                  skip-traced · {Math.round(primary.confidence * 100)}% match
+                  {primary.source === "apollo" ? "Apollo" : "skip-traced"} · {Math.round(primary.confidence * 100)}% match
                   {primary.verifiedAt && ` · verified ${ago(primary.verifiedAt)}`}
                 </span>
               </div>
             )}
+            <EnrichButton entityId={e.id} hasContact={Boolean(primary)} />
           </div>
           <div className="flex items-center gap-1">
             <button
