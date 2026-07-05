@@ -226,6 +226,7 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [diag, setDiag] = useState<Array<{ label: string; ok: boolean; detail: string }> | null>(null);
   const scrape = connector.mode === "scrape";
 
   const save = async (patch: Parameters<typeof admin.saveConnector>[1]) => {
@@ -275,6 +276,16 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
             )}
             {note && <span className="text-accent">{note}</span>}
           </div>
+          {connector.lastRun?.status === "failed" && connector.lastRun.error && (
+            <div className="mt-1 pl-[18px] text-2xs text-danger">
+              Last run failed: {connector.lastRun.error}
+            </div>
+          )}
+          {connector.lastRun?.status === "ok" && connector.lastRun.rowsIngested === 0 && (connector.lastRun.rowsSkipped ?? 0) > 0 && (
+            <div className="mt-1 pl-[18px] text-2xs text-warn">
+              0 ingested, {connector.lastRun.rowsSkipped} skipped/quarantined — run Test source below, and check Data quality.
+            </div>
+          )}
         </button>
         <Toggle
           checked={connector.enabled}
@@ -414,15 +425,50 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between border-t border-line pt-2.5">
+      {diag && (
+        <div className="mt-3 rounded-lg border border-line bg-surface px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-2xs font-semibold text-tx2">Diagnostics</span>
+            <button onClick={() => setDiag(null)} className="text-2xs text-tx3 hover:text-tx1">dismiss</button>
+          </div>
+          <ol className="mt-1.5 flex flex-col gap-1">
+            {diag.map((d, i) => (
+              <li key={i} className="flex items-start gap-2 text-2xs">
+                <span className={d.ok ? "text-ok" : "text-danger"}>{d.ok ? "✓" : "✕"}</span>
+                <span className="min-w-0">
+                  <span className="font-medium text-tx1">{d.label}:</span>{" "}
+                  <span className="break-words text-tx2">{d.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2.5">
         <span className="text-2xs text-tx3">Runs weekdays 11:00 UTC · 3 retries · gated & audited</span>
-        <button
-          disabled={busy || !connector.enabled}
-          onClick={() => void run()}
-          className="rounded-lg border border-line bg-surface px-2.5 py-1 text-2xs font-medium text-tx2 transition-colors hover:text-tx1 disabled:opacity-40"
-        >
-          Run now
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setDiag([{ label: "Testing", ok: true, detail: "dry run — nothing is written…" }]);
+              const res = await admin.testConnector(connector.id);
+              setDiag(res.ok ? res.data.steps : [{ label: "Test", ok: false, detail: res.error }]);
+              setBusy(false);
+            }}
+            className="rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1 text-2xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
+          >
+            Test source
+          </button>
+          <button
+            disabled={busy || !connector.enabled}
+            onClick={() => void run()}
+            className="rounded-lg border border-line bg-surface px-2.5 py-1 text-2xs font-medium text-tx2 transition-colors hover:text-tx1 disabled:opacity-40"
+          >
+            Run now
+          </button>
+        </div>
       </div>
       </>
       )}

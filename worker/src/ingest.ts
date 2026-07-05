@@ -64,12 +64,17 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
 }
 
-async function vendorFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<string> {
+export async function vendorFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 45_000);
   try {
     const res = await fetch(url, { ...init, signal: controller.signal });
-    if (!res.ok) throw new Error(`vendor ${res.status}: ${url.split("?")[0]}`);
+    if (!res.ok) {
+      // Socrata/vendor 4xx bodies name the exact problem (bad column, bad
+      // SoQL…) — surface it instead of a bare status code.
+      const body = (await res.text().catch(() => "")).slice(0, 220);
+      throw new Error(`vendor ${res.status}: ${url.split("?")[0]}${body ? ` — ${body}` : ""}`);
+    }
     return await res.text();
   } finally {
     clearTimeout(timer);
@@ -139,12 +144,12 @@ function sinceDate(): string {
   return d.toISOString().slice(0, 10);
 }
 
-function vendorUrl(cfg: ConnectorCfg, path: string, markets: string[]): string {
+export function vendorUrl(cfg: ConnectorCfg, path: string, markets: string[]): string {
   const params = new URLSearchParams({ since: sinceDate(), markets: markets.join(";") });
   return `${cfg.baseUrl}/${path}?${params}`;
 }
 
-function authHeaders(cfg: ConnectorCfg): Record<string, string> {
+export function connectorAuthHeaders(cfg: ConnectorCfg): Record<string, string> {
   return cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {};
 }
 
@@ -188,7 +193,10 @@ export async function socrataFetch(
       if (typeof v === "string") {
         if (NUMERIC.has(ours)) v = Number(v.replace(/[$,]/g, ""));
         else if (ours === "isCash") v = v === "true" || v === "1" || v === "Y";
-        else if (/At$|Date$/.test(ours) && v.length >= 10) v = v.slice(0, 10);
+        else if (/At$|Date$/.test(ours)) {
+          if (/^\d{8}$/.test(v)) v = `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
+          else if (v.length >= 10) v = v.slice(0, 10);
+        }
       }
       out[ours] = v ?? null;
     }
@@ -537,7 +545,14 @@ export async function acquireAndIngest(
     method = "api";
     confidence = "direct";
     sourceUrl = cfg.baseUrl;
-    const w = window ?? { from: sinceDate(), to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10) };
+    // Open-data portals publish with a lag (ACRIS often runs weeks behind),
+    // so a tight window returns nothing. Daily pulls scan back 45 days —
+    // idempotent doc-number upserts make the overlap free.
+    const lookbackDays = isAcrisMaster(cfg.baseUrl) || isSocrataUrl(cfg.baseUrl) ? 45 : 2;
+    const w = window ?? {
+      from: new Date(Date.now() - lookbackDays * 86_400_000).toISOString().slice(0, 10),
+      to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+    };
     if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
       // NYC ACRIS: native three-dataset join (Master + Legals + Parties).
       const result = await acrisFetch(env, cfg, w);
@@ -548,7 +563,7 @@ export async function acquireAndIngest(
       raw = result.raw;
       rows = result.rows;
     } else {
-      raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: authHeaders(cfg) });
+      raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: connectorAuthHeaders(cfg) });
       rows = JSON.parse(raw) as Record<string, unknown>[];
     }
   }

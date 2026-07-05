@@ -462,6 +462,10 @@ export const admin = {
     method: "PUT",
     body: JSON.stringify(patch),
   }),
+  testConnector: (id: string) =>
+    adminFetch<{ steps: Array<{ label: string; ok: boolean; detail: string }>; rows: number; valid: number }>(
+      `/connectors/${id}/test`, { method: "POST" }
+    ),
   automapConnector: (id: string) =>
     adminFetch<{ ok: boolean; fieldMap: Record<string, unknown> }>(`/connectors/${id}/automap`, { method: "POST" }),
   runConnector: (id: string) =>

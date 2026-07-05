@@ -196,7 +196,10 @@ export interface ConnectorInfo {
   fieldMap: string | null;
   isSocrata: boolean;
   apiKeyLast4: string | null;
-  lastRun: { status: string; finishedAt: string | null; rowsIngested: number } | null;
+  lastRun: {
+    status: string; finishedAt: string | null; rowsIngested: number;
+    rowsSkipped: number; error: string | null;
+  } | null;
 }
 
 export interface IngestionRun {

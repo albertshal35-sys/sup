@@ -282,7 +282,10 @@ export async function renderPageMarkdown(env: Env, url: string): Promise<string>
       }),
     }
   );
-  if (!res.ok) throw new Error(`browser_rendering ${res.status}`);
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 220);
+    throw new Error(`browser_rendering ${res.status}${res.status === 403 ? " — the CLOUDFLARE_API_TOKEN likely lacks the Browser Rendering: Edit permission" : ""}${body ? ` — ${body}` : ""}`);
+  }
   const body = (await res.json()) as { success: boolean; result?: string };
   if (!body.success || !body.result) throw new Error("browser_rendering_empty");
   return body.result;

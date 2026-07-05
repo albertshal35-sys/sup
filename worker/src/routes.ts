@@ -4,7 +4,11 @@ import { json, type Env } from "./index";
 import {
   runIngestionPipeline, runSingleConnector, CONNECTOR_IDS,
   RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
+  getMarkets, socrataFetch, vendorFetch, vendorUrl, connectorAuthHeaders,
 } from "./ingest";
+import { acrisCapable, acrisFetch, isAcrisMaster } from "./acris";
+import { validateRecord } from "./integrity";
+import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
 import { authConfigured, loginWithCode, verifySession } from "./auth";
 import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, recordShape, runModel } from "./ai";
@@ -363,7 +367,8 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
   const rows = await env.DB.prepare(
     `SELECT cc.id, cc.label, cc.enabled, cc.base_url, cc.api_key_last4,
             cc.mode, cc.scrape_url, cc.notes, cc.field_map,
-            r.status AS run_status, r.finished_at AS run_finished, r.rows_ingested AS run_rows
+            r.status AS run_status, r.finished_at AS run_finished, r.rows_ingested AS run_rows,
+            r.rows_skipped AS run_skipped, r.error AS run_error
      FROM connector_config cc
      LEFT JOIN ingestion_runs r ON r.connector = cc.id
        AND r.started_at = (SELECT MAX(started_at) FROM ingestion_runs r2 WHERE r2.connector = cc.id)
@@ -372,6 +377,7 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
     id: string; label: string; enabled: number; base_url: string | null; api_key_last4: string | null;
     mode: string; scrape_url: string | null; notes: string | null; field_map: string | null;
     run_status: string | null; run_finished: string | null; run_rows: number | null;
+    run_skipped: number | null; run_error: string | null;
   }>();
   return json(
     {
@@ -387,7 +393,10 @@ route("GET", "/api/admin/connectors", async (_req, env) => {
         fieldMap: r.field_map,
         isSocrata: isSocrataUrl(r.base_url),
         lastRun: r.run_status
-          ? { status: r.run_status, finishedAt: r.run_finished, rowsIngested: r.run_rows ?? 0 }
+          ? {
+              status: r.run_status, finishedAt: r.run_finished, rowsIngested: r.run_rows ?? 0,
+              rowsSkipped: r.run_skipped ?? 0, error: r.run_error,
+            }
           : null,
       })),
     },
@@ -628,6 +637,84 @@ route("POST", "/api/ai/outreach/:entityId", async (req, env, params) => {
   } catch (err) {
     return json({ error: "ai_failed", detail: String(err).slice(0, 200) }, env, 502);
   }
+});
+
+/* ------------------------ connector diagnostics ------------------------ */
+
+/**
+ * Dry-run one connector and narrate every step — fetch, parse, gate — with
+ * nothing written to the database. This is the truth serum for "0 rows":
+ * it shows the exact URL tried, the HTTP outcome, how many rows came back,
+ * what fields they carry, and why the gates would reject any of them.
+ */
+route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
+  const steps: Array<{ label: string; ok: boolean; detail: string }> = [];
+  const push = (label: string, ok: boolean, detail: string) =>
+    steps.push({ label, ok, detail: detail.slice(0, 400) });
+
+  const cfg = await getConnectorConfig(env, params.id);
+  const def = RECORD_CONNECTORS[params.id];
+  if (!def) return json({ error: "unknown_connector" }, env, 404);
+  const markets = await getMarkets(env);
+  push("Config", true,
+    `mode=${cfg.mode} · ${cfg.mode === "scrape" ? `url=${cfg.scrapeUrl ?? "MISSING"}` : `url=${cfg.baseUrl ?? "MISSING"}`}` +
+    ` · key=${cfg.apiKey ? "present" : "none"} · ${cfg.enabled ? "enabled" : "DISABLED (test still runs)"}`);
+
+  const w = {
+    from: new Date(Date.now() - 45 * 86_400_000).toISOString().slice(0, 10),
+    to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+  };
+  let rows: Record<string, unknown>[] = [];
+  try {
+    if (cfg.mode === "scrape") {
+      if (!cfg.scrapeUrl) throw new Error("scrape_url_missing");
+      if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+        throw new Error("browser_rendering_not_configured — the CLOUDFLARE_API_TOKEN Worker secret / account id are missing (deploy workflow syncs them; token needs Browser Rendering: Edit)");
+      }
+      const md = await renderPageMarkdown(env, cfg.scrapeUrl);
+      push("Render page", true, `${md.length.toLocaleString()} chars of markdown from the headless browser`);
+      push("Page preview", true, md.slice(0, 350).replace(/\n+/g, " "));
+      rows = (await extractRecords(env, cfg.id, md, markets, cfg.notes)) as Record<string, unknown>[];
+      push("AI extraction", rows.length > 0, `${rows.length} candidate record(s) extracted${rows.length === 0 ? " — the page may be a search form or list without record details; give the AI hints in notes, or link directly to a results page" : ""}`);
+    } else if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
+      const r = await acrisFetch(env, cfg, w);
+      rows = r.rows;
+      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
+      if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
+    } else if (isSocrataUrl(cfg.baseUrl)) {
+      if (!cfg.fieldMap?.dateField || !cfg.fieldMap.map) {
+        throw new Error("field_map_missing — click Auto-map with AI on this connector first");
+      }
+      const r = await socrataFetch(cfg, w, 100);
+      rows = r.rows;
+      push("Socrata fetch", true, `window ${w.from} → ${w.to} · dateField=${cfg.fieldMap.dateField} · ${rows.length} mapped row(s)`);
+    } else {
+      if (!cfg.baseUrl) throw new Error("base_url_missing");
+      const raw = await vendorFetch(vendorUrl(cfg, def.path, markets), { headers: connectorAuthHeaders(cfg) });
+      rows = JSON.parse(raw) as Record<string, unknown>[];
+      push("Vendor fetch", true, `${rows.length} row(s)`);
+    }
+  } catch (err) {
+    push("Fetch", false, String(err instanceof Error ? err.message : err));
+    return json({ steps, rows: 0, valid: 0 }, env);
+  }
+
+  if (rows.length > 0) {
+    push("Sample fields", true, Object.keys(rows[0]).join(", "));
+    let valid = 0;
+    const reasons = new Map<string, number>();
+    for (const rec of rows) {
+      const r = validateRecord(def.kind, rec, markets);
+      if (r.length === 0) valid++;
+      else for (const reason of r) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    }
+    const topReasons = [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([r, n]) => `${r} (×${n})`).join(" · ");
+    push("Validation gates", valid > 0,
+      `${valid}/${rows.length} would ingest${topReasons ? ` · rejects: ${topReasons}` : ""}`);
+    return json({ steps, rows: rows.length, valid, sample: rows[0] }, env);
+  }
+  return json({ steps, rows: 0, valid: 0 }, env);
 });
 
 /* ------------------------ on-demand Apollo enrichment ------------------------ */

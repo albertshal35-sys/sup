@@ -71,7 +71,10 @@ const BANKISH =
 
 async function fetchJson<T>(url: string, token: string | null): Promise<{ raw: string; rows: T[] }> {
   const res = await fetch(url, { headers: token ? { "X-App-Token": token } : {} });
-  if (!res.ok) throw new Error(`acris ${res.status}: ${url.split("?")[0]}`);
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 220);
+    throw new Error(`acris ${res.status}: ${url.split("?")[0]}${body ? ` — ${body}` : ""}`);
+  }
   const raw = await res.text();
   const rows = JSON.parse(raw) as T[];
   if (!Array.isArray(rows)) throw new Error("acris_unexpected_payload");
