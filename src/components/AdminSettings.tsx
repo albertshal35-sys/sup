@@ -870,7 +870,7 @@ export function SettingsView() {
       <Section
         title="Historical backfill"
         onHelp={() => setGuideOpen(true)}
-        sub="Walk each API source back 36 months so borrower resumes and rate history are complete, not just complete-from-today. Free-tier friendly: one month-window chunk at a time, continuing automatically after each daily pull."
+        sub="Walk each API source back 36 months so borrower resumes and rate history are complete. Click Start once — the crawl then continues automatically in the background (every 10 minutes) until it finishes. The button also pulls a few chunks immediately so you see progress right away."
       >
         {offline ? (
           <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-xs text-tx3">
@@ -887,10 +887,11 @@ export function SettingsView() {
                       <span className="font-mono">{id}</span>
                       {state && (
                         <span className={classNames(
-                          "text-2xs capitalize",
+                          "text-2xs",
                           state.status === "done" ? "text-ok" : state.status === "error" ? "text-danger" : "text-tx3"
                         )}>
-                          {state.status}{state.status === "error" && state.error ? ` — ${state.error}` : ""}
+                          {state.status === "running" ? "running · auto-continues every 10 min" : state.status}
+                          {state.status === "error" && state.error ? ` — ${state.error}` : ""}
                         </span>
                       )}
                     </div>
@@ -1359,7 +1360,7 @@ function BackfillButton({
         flash(`Backfill complete — ${total.toLocaleString()} rows this session.`);
         break;
       }
-      if (i === 5) flash(`Pulled 6 chunks — ${total.toLocaleString()} rows. Click again to keep crawling; the daily pipeline also continues automatically.`);
+      if (i === 5) flash(`Pulled 6 chunks — ${total.toLocaleString()} rows. The crawl keeps going by itself in the background (every 10 minutes) until complete.`);
     }
     setProgress(null);
     setBusy(false);

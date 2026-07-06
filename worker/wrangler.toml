@@ -2,9 +2,11 @@ name = "lienwolf"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 
-# Daily ingestion, weekdays only, 11:00 UTC (pre-market US)
+# Daily ingestion (weekdays 11:00 UTC, pre-market US) + a light tick every
+# 10 minutes that only advances running historical backfills (no-op cost
+# when none are running).
 [triggers]
-crons = ["0 11 * * 1-5"]
+crons = ["0 11 * * 1-5", "*/10 * * * *"]
 
 # Single deploy: the Worker serves the built frontend as static assets and
 # handles /api/* itself. SPA fallback keeps client-side view routing working.
