@@ -197,19 +197,30 @@ export async function dataQualitySummary(env: Env): Promise<{
   quarantined7d: number;
   ingested7d: number;
   anomalies: SourceAnomaly[];
+  totals: Record<string, number>;
 }> {
-  const [pending, week] = await Promise.all([
+  const [pending, week, ...counts] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) AS c FROM quarantine WHERE status = 'pending'").first<{ c: number }>(),
     env.DB.prepare(
       `SELECT SUM(rows_ingested) AS i, SUM(rows_quarantined) AS q
        FROM source_stats WHERE day >= date('now','-7 days')`
     ).first<{ i: number | null; q: number | null }>(),
+    // What's actually in the database right now (live records only) — the
+    // ground truth behind every "N rows ingested" claim.
+    ...["transactions", "loans", "permits", "liens", "entities"].map((t) =>
+      env.DB.prepare(`SELECT COUNT(*) AS c FROM ${t} WHERE origin = 'live'`).first<{ c: number }>()
+    ),
   ]);
+  const [tx, loans, permits, liens, entities] = counts as Array<{ c: number } | null>;
   return {
     pendingQuarantine: pending?.c ?? 0,
     quarantined7d: week?.q ?? 0,
     ingested7d: week?.i ?? 0,
     anomalies: await detectAnomalies(env),
+    totals: {
+      deeds: tx?.c ?? 0, loans: loans?.c ?? 0, permits: permits?.c ?? 0,
+      liens: liens?.c ?? 0, borrowers: entities?.c ?? 0,
+    },
   };
 }
 

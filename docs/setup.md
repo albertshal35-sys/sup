@@ -214,9 +214,9 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
   set in `wrangler.toml` `[triggers]`. Each run: pull all enabled sources →
   validation gates → scoring → custom signals → entity resolution → digest.
 - **Historical backfill** — Settings → Historical backfill. Click *Start
-  36-mo crawl* per eligible source (enabled, API mode, mapped). It pulls
-  one month-window chunk immediately and continues a couple of chunks after
-  every daily cron until done; *Continue now* advances it manually. Scraped
+  36-mo crawl* per eligible source (enabled, API mode, mapped). Click *Start* once:
+  it pulls a few chunks immediately, then the Worker continues the crawl
+  automatically in the background every 10 minutes until complete. Scraped
   portals can't be backfilled (a page has no history).
 - **Data quality** — Settings → Data quality shows 7-day ingest/quarantine
   counts, records awaiting review (approve = ingest, discard = drop),

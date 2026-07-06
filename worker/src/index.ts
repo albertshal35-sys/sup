@@ -72,9 +72,13 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Daily weekday pull: county deeds/loans, permits, liens, skip-trace,
-    // then trigger materialization + scoring. Hardened with retries and
-    // per-connector audit rows in ingestion_runs.
+    // The 10-minute tick only advances running historical backfills, so a
+    // started crawl finishes on its own without any clicking. The daily
+    // weekday cron runs the full ingestion + scoring pipeline.
+    if (controller.cron === "*/10 * * * *") {
+      ctx.waitUntil(continueBackfills(env));
+      return;
+    }
     ctx.waitUntil(
       runIngestionPipeline(env, new Date(controller.scheduledTime)).then(() => continueBackfills(env))
     );

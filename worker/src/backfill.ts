@@ -3,12 +3,11 @@
  * to 36 months so borrower resumes and rate history are complete, not just
  * complete-from-deploy-day.
  *
- * Free-tier friendly by design: one month-window chunk per invocation per
- * connector, bounded row counts, cursor persisted in `backfill_state`.
- * A chunk runs when the operator clicks "Continue backfill" in Settings and
- * automatically after each daily cron, so an idle deploy still finishes the
- * crawl over a few weeks without ever brushing the daily write budget.
- * Only API-mode sources can backfill (a scraped portal page has no history).
+ * Fully autonomous: click Start once and a 10-minute background cron tick
+ * advances every running crawl until it reaches -36 months — no further
+ * clicks. Free-tier friendly: bounded month-window chunks with the cursor
+ * persisted in `backfill_state`, so pacing never brushes the daily write
+ * budget. Only API-mode sources can backfill (a scraped page has no history).
  */
 
 import type { Env } from "./index";
@@ -21,9 +20,10 @@ import {
   RECORD_CONNECTORS,
 } from "./ingest";
 import { acrisCapable, isAcrisMaster } from "./acris";
+import { rescoreTriggers } from "./scoring";
 
 export const BACKFILL_MONTHS = 36;
-const CHUNKS_PER_CRON = 2; // connectors advanced per scheduled run
+const CHUNKS_PER_CRON = 3; // running crawls advanced per background tick
 
 function monthShift(iso: string, months: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -56,7 +56,7 @@ export async function startBackfill(env: Env, id: string): Promise<boolean> {
 }
 
 /** Pull one month-window chunk for a running backfill. */
-export async function runBackfillChunk(env: Env, id: string): Promise<{ done: boolean; ingested: number }> {
+export async function runBackfillChunk(env: Env, id: string): Promise<{ done: boolean; ingested: number; cursor?: string }> {
   const state = await env.DB.prepare(
     "SELECT cursor_date, target_date FROM backfill_state WHERE connector = ?1 AND status = 'running'"
   )
@@ -84,7 +84,9 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
     )
       .bind(from, done ? "done" : "running", result.ingested, id)
       .run();
-    return { done, ingested: result.ingested };
+    // Materialize triggers as backfilled history reaches the signal windows.
+    if (result.ingested > 0) await rescoreTriggers(env);
+    return { done, ingested: result.ingested, cursor: from };
   } catch (err) {
     await env.DB.prepare(
       "UPDATE backfill_state SET status = 'error', error = ?1, updated_at = datetime('now') WHERE connector = ?2"
@@ -95,7 +97,7 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
   }
 }
 
-/** Advance a couple of running backfills after each cron run. */
+/** Advance running backfills — called by the 10-minute background tick. */
 export async function continueBackfills(env: Env): Promise<void> {
   const running = await env.DB.prepare(
     "SELECT connector FROM backfill_state WHERE status = 'running' ORDER BY updated_at LIMIT ?1"

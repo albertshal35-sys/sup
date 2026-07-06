@@ -725,6 +725,17 @@ export function SettingsView() {
               ))}
             </div>
 
+            {Object.keys(dq.totals ?? {}).length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-line bg-raised/40 px-3.5 py-2.5 text-2xs text-tx3">
+                <span className="font-semibold text-tx2">In your database now:</span>
+                {Object.entries(dq.totals).map(([k, v]) => (
+                  <span key={k} className="tabular-nums">
+                    <span className="font-semibold text-tx1">{v.toLocaleString()}</span> {k}
+                  </span>
+                ))}
+              </div>
+            )}
+
             {dq.anomalies.length > 0 && (
               <div className="rounded-xl border border-danger/25 bg-danger/[0.06] px-3.5 py-2.5">
                 <div className="text-2xs font-semibold text-danger">Source anomalies</div>
@@ -859,7 +870,7 @@ export function SettingsView() {
       <Section
         title="Historical backfill"
         onHelp={() => setGuideOpen(true)}
-        sub="Walk each API source back 36 months so borrower resumes and rate history are complete, not just complete-from-today. Free-tier friendly: one month-window chunk at a time, continuing automatically after each daily pull."
+        sub="Walk each API source back 36 months so borrower resumes and rate history are complete. Click Start once — the crawl then continues automatically in the background (every 10 minutes) until it finishes. The button also pulls a few chunks immediately so you see progress right away."
       >
         {offline ? (
           <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-xs text-tx3">
@@ -876,10 +887,11 @@ export function SettingsView() {
                       <span className="font-mono">{id}</span>
                       {state && (
                         <span className={classNames(
-                          "text-2xs capitalize",
+                          "text-2xs",
                           state.status === "done" ? "text-ok" : state.status === "error" ? "text-danger" : "text-tx3"
                         )}>
-                          {state.status}{state.status === "error" && state.error ? ` — ${state.error}` : ""}
+                          {state.status === "running" ? "running · auto-continues every 10 min" : state.status}
+                          {state.status === "error" && state.error ? ` — ${state.error}` : ""}
                         </span>
                       )}
                     </div>
@@ -893,18 +905,16 @@ export function SettingsView() {
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={async () => {
-                      const res = state?.status === "running"
-                        ? await admin.chunkBackfill(id)
-                        : await admin.startBackfill(id);
-                      flash(res.ok ? "Backfill chunk pulled." : `Error: ${res.error}`);
+                  <BackfillButton
+                    id={id}
+                    running={state?.status === "running"}
+                    done={state?.status === "done"}
+                    flash={flash}
+                    onChanged={() => {
                       void refresh();
+                      void loadAll();
                     }}
-                    className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1 text-2xs font-medium text-accent transition-colors hover:bg-accent/20"
-                  >
-                    {state?.status === "running" ? "Continue now" : state?.status === "done" ? "Re-run" : "Start 36-mo crawl"}
-                  </button>
+                  />
                 </div>
               );
             })}
@@ -1313,5 +1323,68 @@ function SignalBuilder({
         )}
       </div>
     </div>
+  );
+}
+
+
+/* ------------------------- backfill runner ------------------------- */
+
+/**
+ * One click pulls several month-window chunks back to back with live
+ * progress, instead of one silent chunk per click.
+ */
+function BackfillButton({
+  id, running, done, flash, onChanged,
+}: {
+  id: string;
+  running: boolean;
+  done: boolean;
+  flash: (msg: string) => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+
+  const runChunks = async () => {
+    setBusy(true);
+    let total = 0;
+    for (let i = 0; i < 6; i++) {
+      setProgress(`chunk ${i + 1}/6…`);
+      const res = await admin.chunkBackfill(id);
+      if (!res.ok) {
+        flash(`Backfill error: ${res.error}`);
+        break;
+      }
+      total += res.data.ingested;
+      if (res.data.done) {
+        flash(`Backfill complete — ${total.toLocaleString()} rows this session.`);
+        break;
+      }
+      if (i === 5) flash(`Pulled 6 chunks — ${total.toLocaleString()} rows. The crawl keeps going by itself in the background (every 10 minutes) until complete.`);
+    }
+    setProgress(null);
+    setBusy(false);
+    onChanged();
+  };
+
+  const start = async () => {
+    setBusy(true);
+    const res = await admin.startBackfill(id);
+    setBusy(false);
+    if (!res.ok) {
+      flash(`Could not start: ${res.error}`);
+      return;
+    }
+    await runChunks();
+  };
+
+  return (
+    <button
+      disabled={busy}
+      onClick={() => void (running ? runChunks() : start())}
+      className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1 text-2xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-60"
+    >
+      {busy ? (progress ?? "Crawling…") : running ? "Continue crawl" : done ? "Re-run" : "Start 36-mo crawl"}
+    </button>
   );
 }
