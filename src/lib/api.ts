@@ -271,9 +271,55 @@ export async function getIngestionStatus(mode: Mode = "offline"): Promise<Ingest
   return mockIngestion;
 }
 
+interface RawResume {
+  entity: {
+    id: string; name: string; kind: BorrowerResume["entity"]["kind"]; state: string | null;
+    formation_date: string | null; registered_agent: string | null; principal_name: string | null;
+    flips_36mo: number; avg_margin_pct: number | null; avg_hold_days: number | null;
+    volume_36mo: number; velocity_score: number;
+  };
+  contacts: Array<{ name: string; title: string | null; phone: string | null; email: string | null; linkedin: string | null; source: string; confidence: number; verified_at: string | null }>;
+  transactions: Array<{ id: string; side: "purchase" | "sale"; price: number; is_cash: number; address: string; city: string; state: string; recorded_at: string }>;
+  loans: Array<{ id: string; lender_name: string; lender_type: string; principal: number; rate_pct: number | null; originated_at: string; maturity_date: string | null; status: string; address: string | null; source_id: string | null; source_url: string | null; source_method: string | null; confidence: string | null }>;
+  network: BorrowerResume["network"];
+}
+
 export async function getResume(entityId: string, fallbackItem?: TriggerItem): Promise<BorrowerResume | null> {
-  // Worker resume payload needs reshaping too; for now the demo resumes cover
-  // the seeded entities and any feed row can synthesize a skeleton.
+  // Server first: backfilled/live history must win over bundled samples.
+  const live = await tryFetch<RawResume>(`/borrowers/${entityId}/resume`);
+  if (live?.entity) {
+    const e = live.entity;
+    return {
+      entity: {
+        id: e.id, name: titleCase(e.name), kind: e.kind, principalName: e.principal_name,
+        flips36mo: e.flips_36mo ?? 0, avgMarginPct: e.avg_margin_pct,
+        velocityScore: e.velocity_score ?? 0, state: e.state,
+        formationDate: e.formation_date, registeredAgent: e.registered_agent,
+        avgHoldDays: e.avg_hold_days, volume36mo: e.volume_36mo ?? 0,
+      },
+      contacts: (live.contacts ?? []).map((c) => ({
+        name: c.name, title: c.title, phone: c.phone, email: c.email, linkedin: c.linkedin,
+        source: c.source, confidence: c.confidence, verifiedAt: c.verified_at,
+      })),
+      transactions: (live.transactions ?? []).map((t) => ({
+        id: t.id, side: t.side, price: t.price, isCash: Boolean(t.is_cash),
+        address: t.address, city: t.city, state: t.state, recordedAt: t.recorded_at,
+      })),
+      loans: (live.loans ?? []).map((l) => ({
+        id: l.id, lenderName: titleCase(l.lender_name), lenderType: l.lender_type,
+        principal: l.principal, ratePct: l.rate_pct, originatedAt: l.originated_at,
+        maturityDate: l.maturity_date, status: l.status, address: l.address ?? "",
+        provenance: l.source_id
+          ? { sourceId: l.source_id, sourceUrl: l.source_url, sourceMethod: l.source_method, confidence: (l.confidence ?? "direct") as import("../types").RecordConfidence }
+          : null,
+      })),
+      activeSignals: fallbackItem
+        ? [{ kind: fallbackItem.kind, headline: fallbackItem.headline, score: fallbackItem.score }]
+        : [],
+      network: live.network ?? null,
+    };
+  }
+  // Offline preview / unknown entity: bundled resumes, then feed synthesis.
   const seeded = mockResumes[entityId];
   if (seeded) return seeded;
   if (fallbackItem) return synthesizeResume(fallbackItem);
@@ -494,6 +540,7 @@ export const admin = {
   getDataQuality: async (): Promise<DataQuality | null> => {
     const res = await adminFetch<{
       pendingQuarantine: number; quarantined7d: number; ingested7d: number;
+      totals?: Record<string, number>;
       anomalies: DataQuality["anomalies"];
       quarantine: Array<{ id: string; connector: string; record_kind: string; payload_json: string; reasons_json: string; source_url: string | null; created_at: string }>;
       merges: Array<{ id: string; name_a: string; name_b: string; reason: string; score: number }>;
@@ -502,6 +549,7 @@ export const admin = {
     const d = res.data;
     return {
       pendingQuarantine: d.pendingQuarantine, quarantined7d: d.quarantined7d, ingested7d: d.ingested7d,
+      totals: d.totals ?? {},
       anomalies: d.anomalies,
       quarantine: d.quarantine.map((q) => ({
         id: q.id, connector: q.connector, recordKind: q.record_kind,

@@ -21,6 +21,7 @@ import {
   RECORD_CONNECTORS,
 } from "./ingest";
 import { acrisCapable, isAcrisMaster } from "./acris";
+import { rescoreTriggers } from "./scoring";
 
 export const BACKFILL_MONTHS = 36;
 const CHUNKS_PER_CRON = 2; // connectors advanced per scheduled run
@@ -56,7 +57,7 @@ export async function startBackfill(env: Env, id: string): Promise<boolean> {
 }
 
 /** Pull one month-window chunk for a running backfill. */
-export async function runBackfillChunk(env: Env, id: string): Promise<{ done: boolean; ingested: number }> {
+export async function runBackfillChunk(env: Env, id: string): Promise<{ done: boolean; ingested: number; cursor?: string }> {
   const state = await env.DB.prepare(
     "SELECT cursor_date, target_date FROM backfill_state WHERE connector = ?1 AND status = 'running'"
   )
@@ -84,7 +85,9 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
     )
       .bind(from, done ? "done" : "running", result.ingested, id)
       .run();
-    return { done, ingested: result.ingested };
+    // Materialize triggers as backfilled history reaches the signal windows.
+    if (result.ingested > 0) await rescoreTriggers(env);
+    return { done, ingested: result.ingested, cursor: from };
   } catch (err) {
     await env.DB.prepare(
       "UPDATE backfill_state SET status = 'error', error = ?1, updated_at = datetime('now') WHERE connector = ?2"

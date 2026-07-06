@@ -259,7 +259,17 @@ export const useApp = create<AppState>()(
 
       openResume: async (entityId, fromItem) => {
         const resume = await getResume(entityId, fromItem);
-        if (resume) set({ resume, resumeOpen: true });
+        if (!resume) return;
+        // Every live signal for this borrower, from the already-loaded feeds.
+        const signals = Object.values(get().feeds)
+          .flat()
+          .filter((t) => t.entity.id === entityId)
+          .sort((a, b) => b.score - a.score)
+          .map((t) => ({ kind: t.kind, headline: t.headline, score: t.score }));
+        set({
+          resume: { ...resume, activeSignals: signals.length ? signals : resume.activeSignals },
+          resumeOpen: true,
+        });
       },
       closeResume: () => set({ resumeOpen: false }),
 

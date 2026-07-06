@@ -466,6 +466,7 @@ export const mockDataQuality: DataQuality = {
   pendingQuarantine: 2,
   quarantined7d: 5,
   ingested7d: 2841,
+  totals: { deeds: 1732, loans: 486, permits: 402, liens: 97, borrowers: 611 },
   anomalies: [],
   quarantine: [
     {

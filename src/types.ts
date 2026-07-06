@@ -291,6 +291,7 @@ export interface DataQuality {
   pendingQuarantine: number;
   quarantined7d: number;
   ingested7d: number;
+  totals: Record<string, number>;
   anomalies: SourceAnomaly[];
   quarantine: QuarantineRow[];
   merges: MergeSuggestion[];
