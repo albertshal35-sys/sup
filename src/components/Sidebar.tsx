@@ -235,10 +235,10 @@ export function Sidebar() {
             className="absolute inset-0 animate-fade-in bg-black/40 backdrop-blur-sm"
             onClick={() => setMobileNav(false)}
           />
-          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-slide-in-left border-r border-line bg-surface shadow-pop">
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-slide-in-left border-r border-line bg-surface pt-[env(safe-area-inset-top)] shadow-pop">
             <button
               onClick={() => setMobileNav(false)}
-              className="absolute right-3 top-4 rounded-lg p-1.5 text-tx2 hover:bg-raised"
+              className="absolute right-3 top-[calc(env(safe-area-inset-top)+1rem)] rounded-lg p-1.5 text-tx2 hover:bg-raised"
               aria-label="Close menu"
             >
               <IconX className="h-4 w-4" />

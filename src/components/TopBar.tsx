@@ -37,7 +37,7 @@ export function TopBar() {
   const operatorOrg = outreach?.company?.trim() || "LienWolf";
 
   return (
-    <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-xl">
+    <header className="sticky top-0 z-20 border-b border-line bg-bg/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
       <div className="flex h-14 items-center gap-2 px-3 sm:gap-3 sm:px-5 lg:px-6">
         <button
           onClick={() => setMobileNav(true)}
