@@ -22,6 +22,7 @@ import type { ConnectorCfg } from "./ingest";
 const MASTER_ID = "bnx9-e6tj";
 const LEGALS_ID = "8h5j-fqxa";
 const PARTIES_ID = "636b-3b5g";
+const DOC_CODES_ID = "7isb-wh4c"; // Document Control Codes — doc_type -> human label
 
 const BOROUGH: Record<string, { city: string; county: string }> = {
   "1": { city: "Manhattan", county: "New York" },
@@ -38,12 +39,25 @@ const DOC_FILTERS: Record<string, string> = {
   satisfactions: "doc_type = 'SAT'",
 };
 
+/** Connector ids the lien-family row shaper below knows how to fill in. */
+const LIEN_FAMILY = new Set(["liens", "lis_pendens", "tax_liens"]);
+
 export function isAcrisMaster(url: string | null): boolean {
   return Boolean(url && url.includes(MASTER_ID));
 }
 
-export function acrisCapable(connectorId: string): boolean {
-  return connectorId in DOC_FILTERS;
+/**
+ * A connector is ACRIS-joinable if it's one of the three built-in document
+ * families (deeds/loans/satisfactions) or the operator has supplied an
+ * explicit `doc_type` filter via field-map `where` — e.g. after running
+ * "Discover ACRIS doc types" in Test source and pasting in the real code
+ * for Mechanic's Lien / Notice of Pendency / NYC Tax Lien. We deliberately
+ * don't guess those codes: ACRIS's `doc_type` values aren't documented
+ * anywhere reliable, so shipping a wrong guess would silently return 0 rows
+ * forever, which is the exact failure mode this is meant to fix.
+ */
+export function acrisCapable(connectorId: string, hasWhereOverride = false): boolean {
+  return connectorId in DOC_FILTERS || (LIEN_FAMILY.has(connectorId) && hasWhereOverride);
 }
 
 interface MasterRow {
@@ -201,9 +215,68 @@ export async function acrisFetch(
         borrowerName: party.p1 ?? "",
         satisfiedAt: date,
       });
+    } else if (LIEN_FAMILY.has(cfg.id)) {
+      // Mechanic's lien / Notice of Pendency / recorded tax lien — same
+      // party convention as deeds/mortgages (party1 = the property-side
+      // party, party2 = the other side), which is our best-effort mapping
+      // until confirmed per doc class via Discover ACRIS doc types.
+      rows.push({
+        ...common,
+        claimant: party.p2 ?? "",
+        ownerName: party.p1 ?? "",
+        amount,
+        filedAt: date,
+      });
     }
   }
   return { raw, rows };
+}
+
+/**
+ * Sample the Master dataset for a date window with NO type filter, group by
+ * doc_type, and join the counts against the Document Control Codes lookup
+ * dataset for human-readable labels. This is the antidote to guessing:
+ * point Test source at it once and read off the exact code for "Mechanic's
+ * Lien" / "Notice of Pendency" / "NYC Tax Lien" instead of hoping a filter
+ * string is right.
+ */
+export async function discoverDocTypes(
+  cfg: ConnectorCfg,
+  window: { from: string; to: string }
+): Promise<{ docType: string; count: number; description: string | null }[]> {
+  if (!cfg.baseUrl) return [];
+  const params = new URLSearchParams({
+    $select: "doc_type, count(document_id) as n",
+    $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}'`,
+    $group: "doc_type",
+    $order: "n DESC",
+    $limit: "30",
+  });
+  const { rows } = await fetchJson<{ doc_type: string; n: string }>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
+  if (rows.length === 0) return [];
+
+  const codes = rows.map((r) => `'${r.doc_type.replace(/'/g, "")}'`).join(",");
+  const codesBase = resourceBase(cfg.baseUrl, DOC_CODES_ID);
+  const codeParams = new URLSearchParams({
+    $where: `doc_type in(${codes})`,
+    $select: "doc_type, doc_type_description",
+    $limit: "60",
+  });
+  let labels = new Map<string, string>();
+  try {
+    const { rows: codeRows } = await fetchJson<{ doc_type: string; doc_type_description?: string }>(
+      `${codesBase}?${codeParams}`, cfg.apiKey
+    );
+    labels = new Map(codeRows.map((c) => [c.doc_type, c.doc_type_description ?? ""]));
+  } catch {
+    // Lookup dataset is best-effort — the codes + counts alone are still useful.
+  }
+
+  return rows.map((r) => ({
+    docType: r.doc_type,
+    count: Number(r.n) || 0,
+    description: labels.get(r.doc_type) || null,
+  }));
 }
 
 /**

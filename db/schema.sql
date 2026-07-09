@@ -427,15 +427,27 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_recent ON ingestion_runs(started_at DES
 
 -- ------------------------------------------------------------
 -- Default NYC source endpoints for fresh installs (mirrors
--- migration 0006; connectors stay disabled until enabled).
+-- migrations 0006 + 0009; connectors stay disabled until enabled).
 -- ------------------------------------------------------------
-UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/w9ak-ipjd.json' WHERE id='permits' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/w9ak-ipjd.json',
+  notes='DOB NOW Build job filings (New Building + full Demolition only — other job types are on the legacy DOB Job Application Filings dataset, ic3t-wcy2). Ground-up = New Building (NB); structural = Alteration CO (ALT-CO/ALT1). For actual permit ISSUANCE events (construction start, not application), the companion dataset is DOB Permit Issuance (data.cityofnewyork.us/resource/ipu4-2q9a.json). Free Socrata app token recommended for volume.'
+  WHERE id='permits' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/6bgk-3dad.json' WHERE id='violations' AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/9rz4-mjek.json' WHERE id='tax_liens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/9rz4-mjek.json',
+  notes='NYC''s 2026 tax lien sale is currently SUSPENDED pending a transition to a NYC Land Bank (targeted 2029) — this annual sale-list dataset will likely stay empty or stale until sales resume; that is expected, not a broken connector. For a live signal now, point this connector''s base_url at the ACRIS Master (https://data.cityofnewyork.us/resource/bnx9-e6tj.json) instead, run "Discover ACRIS doc types" in Test source, and filter on the NYC/Federal Tax Lien code — recorded tax liens are still ongoing even with the sale paused.'
+  WHERE id='tax_liens' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.ny.gov/resource/n9v6-gdp6.json' WHERE id='corp_registry' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json' WHERE id IN ('county_deeds','county_loans','satisfactions') AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='scrape', scrape_url='https://iapps.courts.state.ny.us/webcivil/ecourtsMain' WHERE id='lis_pendens' AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='scrape', scrape_url='https://www.nycourts.gov/courts/2jd/kings/civil/foreclosures.shtml' WHERE id='auctions' AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='scrape', scrape_url='https://appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame' WHERE id='ucc_filings' AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='scrape', scrape_url='https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType' WHERE id='liens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json',
+  notes='ACRIS Real Property Master, joined with Legals + Parties. Run "Discover ACRIS doc types" in Test source to find the exact code for Notice of Pendency (Lis Pendens), then set the field-map "where" to doc_type = ''<that code>''. This is the single best rescue-capital lead once configured.'
+  WHERE id='lis_pendens' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://ww2.nycourts.gov/courts/2jd/kings/civil/foreclosuresales.shtml',
+  notes='Kings County Supreme foreclosure auction calendar (swap per borough: Queens ww2.nycourts.gov/courts/11jd/supctqns/foreclosure-auctions.shtml, Bronx 12jd, Staten Island 13jd, Manhattan ww2.nycourts.gov/courts/1jd/supctmanh/foreclosure-auctions.shtml — every judicial district uses its own URL pattern, there is no unified API). Auction buyers are all-cash by definition — delayed-financing targets.'
+  WHERE id='auctions' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='scrape', scrape_url='https://appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame',
+  notes='NY DOS UCC search (appext20.dos.ny.gov) is form/session-driven with no public API or bulk export — there is no URL fix for that. To use it: run a search on the site for a secured party or debtor name, then paste the RESULTS page URL (after you search, not the landing page) here so it can be scraped. ACRIS separately records UCC1/UCC3 filings, but only for co-op share loans, not general business assets — not a substitute for most competitor-lender lookups.'
+  WHERE id='ucc_filings' AND base_url IS NULL AND scrape_url IS NULL;
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json',
+  notes='ACRIS Real Property Master, joined with Legals + Parties. Run "Discover ACRIS doc types" in Test source to find the exact code for Mechanic''s Lien, then set the field-map "where" to doc_type = ''<that code>''. Staten Island liens are not on ACRIS — use rcc.richmondcountyclerk.com instead.'
+  WHERE id='liens' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://api.apollo.io/v1' WHERE id='skip_trace' AND base_url IS NULL AND scrape_url IS NULL;

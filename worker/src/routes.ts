@@ -6,7 +6,7 @@ import {
   RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
   getMarkets, socrataFetch, vendorFetch, vendorUrl, connectorAuthHeaders,
 } from "./ingest";
-import { acrisCapable, acrisFetch, isAcrisMaster } from "./acris";
+import { acrisCapable, acrisFetch, discoverDocTypes, isAcrisMaster } from "./acris";
 import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
@@ -676,11 +676,24 @@ route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
       push("Page preview", true, md.slice(0, 350).replace(/\n+/g, " "));
       rows = (await extractRecords(env, cfg.id, md, markets, cfg.notes)) as Record<string, unknown>[];
       push("AI extraction", rows.length > 0, `${rows.length} candidate record(s) extracted${rows.length === 0 ? " — the page may be a search form or list without record details; give the AI hints in notes, or link directly to a results page" : ""}`);
-    } else if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
-      const r = await acrisFetch(env, cfg, w);
-      rows = r.rows;
-      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
-      if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
+    } else if (isAcrisMaster(cfg.baseUrl)) {
+      if (acrisCapable(cfg.id, Boolean(cfg.fieldMap?.where))) {
+        const r = await acrisFetch(env, cfg, w);
+        rows = r.rows;
+        push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
+        if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
+      } else {
+        push("Note", false, 'This connector has no doc_type filter yet — set one in the field-map "where" box below, e.g. doc_type = \'XYZ\'. See "ACRIS doc types in window" below for the real codes.');
+      }
+      try {
+        const types = await discoverDocTypes(cfg, w);
+        push("ACRIS doc types in window", types.length > 0,
+          types.length === 0
+            ? "no documents recorded in this window"
+            : types.map((t) => `${t.docType}${t.description ? ` (${t.description})` : ""} ×${t.count}`).join(" · "));
+      } catch (err) {
+        push("ACRIS doc types in window", false, String(err instanceof Error ? err.message : err));
+      }
     } else if (isSocrataUrl(cfg.baseUrl)) {
       if (!cfg.fieldMap?.dateField || !cfg.fieldMap.map) {
         throw new Error("field_map_missing — click Auto-map with AI on this connector first");

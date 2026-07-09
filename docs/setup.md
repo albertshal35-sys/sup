@@ -157,31 +157,58 @@ the URL shape and switches to its Socrata adapter automatically. Then:
    and paste it as the connector's API key to avoid throttling.
 3. Enable the connector and hit **Run now** to test.
 
-Connectors come **pre-filled with real endpoints** (seeded by migration
-0006 — your edits are never overwritten); verify, auto-map, and enable:
+Connectors come **pre-filled with real endpoints** (seeded by migrations
+0006 + 0009 — your edits are never overwritten); verify, auto-map, and enable:
 
 | Connector | Seeded endpoint | Dataset |
 | --- | --- | --- |
-| Permits | `data.cityofnewyork.us/resource/w9ak-ipjd.json` | DOB NOW: Build — Job Application Filings |
+| Permits | `data.cityofnewyork.us/resource/w9ak-ipjd.json` | DOB NOW: Build — Job Application Filings (NB/DM only; other job types are on the legacy `ic3t-wcy2` dataset) |
 | Violations | `data.cityofnewyork.us/resource/6bgk-3dad.json` | DOB ECB Violations (respondent + penalty) |
-| Tax liens | `data.cityofnewyork.us/resource/9rz4-mjek.json` | DOF Tax Lien Sale Lists |
+| Tax liens | `data.cityofnewyork.us/resource/9rz4-mjek.json` | DOF Tax Lien Sale Lists — **NYC's 2026 sale is suspended** pending a Land Bank transition (targeted 2029); expect this one to look quiet until it resumes |
 | Corp registry | `data.ny.gov/resource/n9v6-gdp6.json` | NYS Active Corporations |
 | Deeds / loans / satisfactions | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | ACRIS Real Property Master — see caveat below |
+| Mechanic's liens / Lis pendens | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | Also ACRIS — a recorded document type, not a scrape (see "Discover ACRIS doc types" below) |
+| Auctions | `ww2.nycourts.gov/courts/2jd/kings/civil/foreclosuresales.shtml` | Kings County Supreme foreclosure calendar (scrape; swap URL per borough — every judicial district uses its own path) |
+| UCC filings | `appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame` | NY DOS UCC search (scrape; form-driven, see caveat below) |
 
 **ACRIS is joined natively:** the pipeline automatically joins Master
 (amounts/dates) with Legals (`8h5j-fqxa`, addresses) and Parties
-(`636b-3b5g`, names) by `document_id`, producing complete deed, mortgage,
-and satisfaction records from the free city APIs — no field map needed for
-these three connectors. Document types default to `DEED` / `MTGE`+`AGMT` /
-`SAT` (override via the field-map `where`). Lenders are auto-classified
-bank vs private by name, and all-cash purchases are detected by
-reconciling deeds against mortgage recordings on the same parcel.
-Scrape-mode connectors (lis pendens, auctions, UCC, borough liens) are
-seeded with the relevant portal URLs — swap in the results page for your
-borough/search.
+(`636b-3b5g`, names) by `document_id`, producing complete records from the
+free city APIs — no field map needed for deeds/loans/satisfactions, whose
+document types default to `DEED` / `MTGE`+`AGMT` / `SAT`. Lenders are
+auto-classified bank vs private by name, and all-cash purchases are
+detected by reconciling deeds against mortgage recordings on the same
+parcel.
+
+**Mechanic's liens and lis pendens are recorded ACRIS document types too**
+— not scrapes — but we deliberately don't ship a guessed `doc_type` code
+for them, because ACRIS's codes aren't documented anywhere reliable and a
+wrong guess would silently return 0 rows forever (the exact bug this
+covers). Instead: click **Test source** on either connector — the
+diagnostic runs a **"Discover ACRIS doc types"** step that samples the
+Master dataset for the last 45 days with no filter, groups by `doc_type`,
+and lists each code with its real count and (when available) description.
+Read off the right one and paste `doc_type = '<code>'` into that
+connector's field-map **where** box. The same trick works for any other
+ACRIS document class you want to add later (judgments, easements, etc.) —
+just point a connector's base URL at the Master dataset and run Discover.
 
 ACRIS covers Manhattan/Brooklyn/Queens/Bronx; Staten Island (Richmond
 County) records live with the Richmond County Clerk → use scrape mode.
+
+**UCC filings are a structural dead end for automation**: NY DOS UCC
+search has no public API or bulk export — it's session/form-driven, so
+there's no URL that returns results directly. To use it, search the site
+yourself, then paste the **results page URL** (after searching, not the
+landing page) into the connector. ACRIS does record UCC1/UCC3, but only
+for co-op share loans, not general business assets, so it isn't a
+substitute for competitor-lender lookups.
+
+**Foreclosure auction calendars have no unified source** — each judicial
+district publishes its own page with its own URL pattern (`ww2.nycourts.gov`
+subdomain, filename varies). Swap the seeded Kings County URL for your
+borough and re-verify with Test source; these pages change layout
+occasionally, so re-check if a previously-working scrape goes to 0.
 
 API mode also accepts any normalizing vendor API implementing the simple
 contract documented at the top of `worker/src/ingest.ts`.
@@ -270,3 +297,6 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Deploy Action fails on wrangler | Node < 22 or missing GitHub secrets (section 3) |
 | Data Pipeline widget says "no pulls yet" | Expected until at least one connector is enabled and has run |
 | Records missing that you expected | Check Settings → Data quality — they may be quarantined (outside markets, failed a sanity gate, or failed grounding) |
+| Nothing populates at all, connectors look configured | Connectors are **disabled by default** — a seeded/correct endpoint does nothing until you flip the toggle on in Settings and either wait for the weekday cron or click *Run now* |
+| ACRIS-backed connector (liens/lis pendens) always returns 0 rows | It ships with no `doc_type` filter on purpose — click *Test source*, read the **"ACRIS doc types in window"** line for the real code, then paste `doc_type = '<code>'` into that connector's field-map *where* box |
+| Tax lien connector is empty | NYC's 2026 tax lien sale is suspended citywide — not a config problem; see the connector's notes for a live ACRIS-based alternative |
