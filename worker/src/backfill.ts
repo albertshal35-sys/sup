@@ -74,6 +74,19 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
 
   const to = state.cursor_date;
   const from = monthShift(to, -1) < state.target_date ? state.target_date : monthShift(to, -1);
+
+  // Log through ingestion_runs like every other connector run — otherwise
+  // the Data Pipeline card, per-connector "last run", and /api/health stay
+  // blind to backfill activity even while it's ingesting real rows (one
+  // attempt only, no retry loop: a failed chunk just retries on the next
+  // 10-minute tick, that's already the backfill's own retry mechanism).
+  const runId = crypto.randomUUID();
+  await env.DB.prepare(
+    "INSERT INTO ingestion_runs (id, connector, started_at, status) VALUES (?1, ?2, datetime('now'), 'running')"
+  )
+    .bind(runId, id)
+    .run();
+
   try {
     const markets = await getMarkets(env);
     const result = await acquireAndIngest(env, cfg, markets, { from, to });
@@ -84,14 +97,26 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
     )
       .bind(from, done ? "done" : "running", result.ingested, id)
       .run();
+    await env.DB.prepare(
+      `UPDATE ingestion_runs SET finished_at = datetime('now'), status = 'ok',
+       rows_ingested = ?1, rows_skipped = ?2, attempts = 1, checksum = ?3 WHERE id = ?4`
+    )
+      .bind(result.ingested, result.skipped, result.checksum, runId)
+      .run();
     // Materialize triggers as backfilled history reaches the signal windows.
     if (result.ingested > 0) await rescoreTriggers(env);
     return { done, ingested: result.ingested, cursor: from };
   } catch (err) {
+    const message = String(err instanceof Error ? err.message : err).slice(0, 300);
     await env.DB.prepare(
       "UPDATE backfill_state SET status = 'error', error = ?1, updated_at = datetime('now') WHERE connector = ?2"
     )
-      .bind(String(err).slice(0, 300), id)
+      .bind(message, id)
+      .run();
+    await env.DB.prepare(
+      "UPDATE ingestion_runs SET finished_at = datetime('now'), status = 'failed', attempts = 1, error = ?1 WHERE id = ?2"
+    )
+      .bind(message, runId)
       .run();
     return { done: true, ingested: 0 };
   }
