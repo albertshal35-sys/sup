@@ -553,7 +553,7 @@ export async function acquireAndIngest(
       from: new Date(Date.now() - lookbackDays * 86_400_000).toISOString().slice(0, 10),
       to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
     };
-    if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
+    if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id, Boolean(cfg.fieldMap?.where))) {
       // NYC ACRIS: native three-dataset join (Master + Legals + Parties).
       const result = await acrisFetch(env, cfg, w);
       raw = result.raw;
