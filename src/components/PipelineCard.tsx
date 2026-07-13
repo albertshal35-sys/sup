@@ -40,7 +40,7 @@ export function PipelineCard() {
       <TileHeader
         icon={<IconPulse className="h-4 w-4" />}
         title="Data Pipeline"
-        hint="daily · weekdays 11:00 UTC"
+        hint="sweeps daily 11:00 & 23:00 UTC"
       />
       {runs.length === 0 ? (
         <div className="px-4 pb-4 sm:px-5">

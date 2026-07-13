@@ -42,22 +42,75 @@ const DOC_FILTERS: Record<string, string> = {
 /** Connector ids the lien-family row shaper below knows how to fill in. */
 const LIEN_FAMILY = new Set(["liens", "lis_pendens", "tax_liens"]);
 
+/**
+ * Description patterns used to resolve each lien-family connector's ACRIS
+ * document-type codes from the city's own Document Control Codes lookup
+ * dataset at run time. This is NOT guessing the codes — it queries the
+ * authoritative code table and matches on the human-readable description,
+ * so the exact code strings always come from production data. Resolved
+ * filters are persisted to the connector's field map, where the operator
+ * can see and override them.
+ */
+const FAMILY_DOC_PATTERNS: Record<string, RegExp> = {
+  lis_pendens: /PENDEN/i,          // NOTICE OF PENDENCY / LIS PENDENS variants
+  liens: /MECHANIC/i,              // MECHANICS LIEN (+ amendments)
+  tax_liens: /TAX\s*LIEN/i,        // NYC / FEDERAL TAX LIEN variants
+};
+
 export function isAcrisMaster(url: string | null): boolean {
   return Boolean(url && url.includes(MASTER_ID));
 }
 
 /**
- * A connector is ACRIS-joinable if it's one of the three built-in document
- * families (deeds/loans/satisfactions) or the operator has supplied an
- * explicit `doc_type` filter via field-map `where` — e.g. after running
- * "Discover ACRIS doc types" in Test source and pasting in the real code
- * for Mechanic's Lien / Notice of Pendency / NYC Tax Lien. We deliberately
- * don't guess those codes: ACRIS's `doc_type` values aren't documented
- * anywhere reliable, so shipping a wrong guess would silently return 0 rows
- * forever, which is the exact failure mode this is meant to fix.
+ * A connector can use the ACRIS join if it's one of the three built-in
+ * document families (deeds/loans/satisfactions, fixed codes) or a
+ * lien-family connector (codes resolved at run time, or operator-set via
+ * field-map `where`).
  */
-export function acrisCapable(connectorId: string, hasWhereOverride = false): boolean {
-  return connectorId in DOC_FILTERS || (LIEN_FAMILY.has(connectorId) && hasWhereOverride);
+export function acrisCapable(connectorId: string): boolean {
+  return connectorId in DOC_FILTERS || LIEN_FAMILY.has(connectorId);
+}
+
+/**
+ * Resolve a lien-family connector's `doc_type` filter by matching document
+ * descriptions in the Document Control Codes dataset, then persist it to
+ * the connector's field map so subsequent pulls are deterministic and the
+ * operator can inspect/adjust it in Settings. Returns the SoQL filter, or
+ * null when nothing matched (caller decides how loudly to fail).
+ */
+export async function resolveAcrisDocTypes(env: Env, cfg: ConnectorCfg): Promise<string | null> {
+  const pattern = FAMILY_DOC_PATTERNS[cfg.id];
+  if (!pattern || !cfg.baseUrl) return null;
+  const base = resourceBase(cfg.baseUrl, DOC_CODES_ID);
+  const { rows } = await fetchJson<Record<string, string>>(`${base}?$limit=500`, cfg.apiKey);
+  if (rows.length === 0) return null;
+
+  // Column names in the lookup dataset are quirky (e.g. doc__type), so
+  // detect them from the payload instead of hardcoding.
+  const keys = Object.keys(rows[0]);
+  const codeKey = keys.find((k) => /doc/i.test(k) && /type/i.test(k) && !/desc/i.test(k));
+  const descKey = keys.find((k) => /desc/i.test(k));
+  if (!codeKey || !descKey) return null;
+
+  const codes = [
+    ...new Set(
+      rows
+        .filter((r) => pattern.test(String(r[descKey] ?? "")))
+        .map((r) => String(r[codeKey] ?? "").trim().replace(/'/g, ""))
+        .filter(Boolean)
+    ),
+  ].slice(0, 6);
+  if (codes.length === 0) return null;
+
+  const where = `doc_type in(${codes.map((c) => `'${c}'`).join(",")})`;
+  const fieldMap = { ...(cfg.fieldMap ?? {}), where };
+  await env.DB.prepare(
+    "UPDATE connector_config SET field_map = ?1, updated_at = datetime('now') WHERE id = ?2"
+  )
+    .bind(JSON.stringify(fieldMap), cfg.id)
+    .run();
+  cfg.fieldMap = fieldMap;
+  return where;
 }
 
 interface MasterRow {
@@ -125,12 +178,17 @@ async function fetchByDocIds<T>(
  * existing gates/upserts (DeedRec / LoanRec / SatisfactionRec).
  */
 export async function acrisFetch(
-  _env: Env,
+  env: Env,
   cfg: ConnectorCfg,
   window: { from: string; to: string }
 ): Promise<{ raw: string; rows: Record<string, unknown>[] }> {
-  const filter = cfg.fieldMap?.where?.replace(/;/g, "").trim() || DOC_FILTERS[cfg.id];
-  if (!filter || !cfg.baseUrl) throw new Error("acris_not_applicable");
+  let filter = cfg.fieldMap?.where?.replace(/;/g, "").trim() || DOC_FILTERS[cfg.id] || null;
+  if (!filter) filter = await resolveAcrisDocTypes(env, cfg);
+  if (!filter || !cfg.baseUrl) {
+    throw new Error(
+      "acris_doc_type_unresolved — could not match this connector's document class in the ACRIS code table; run Test source and paste a doc_type filter from the 'ACRIS doc types in window' list into the field-map where"
+    );
+  }
 
   const masterParams = new URLSearchParams({
     $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}' AND (${filter})`,
@@ -283,6 +341,9 @@ export async function discoverDocTypes(
  * Post-pass cash detection for ACRIS deeds: flip is_cash off wherever a
  * mortgage was recorded against the same parcel within 45 days of the
  * purchase. Runs with scoring so it always reflects the latest loans pull.
+ * Covers the FULL deed history, not just recent windows — backfill pulls
+ * deeds and mortgages on independent schedules, so any recency guard here
+ * would leave whichever arrived first permanently mis-flagged.
  */
 export async function recomputeCashFlags(env: Env): Promise<void> {
   await env.DB.prepare(
@@ -293,7 +354,6 @@ export async function recomputeCashFlags(env: Env): Promise<void> {
           AND julianday(l.originated_at) BETWEEN julianday(transactions.recorded_at) - 5
                                              AND julianday(transactions.recorded_at) + 45
       ) THEN 0 ELSE 1 END
-     WHERE source_id = 'county_deeds' AND side = 'purchase'
-       AND recorded_at >= date('now','-120 days')`
+     WHERE source_id = 'county_deeds' AND side = 'purchase'`
   ).run();
 }

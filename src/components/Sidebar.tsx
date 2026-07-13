@@ -96,12 +96,12 @@ function NavButton({ item, expanded }: { item: NavItem; expanded: boolean }) {
 /** Honest pipeline health, derived from the latest real runs. */
 function pipelineHealth(runs: { status: string }[]): { tone: string; label: string; sub: string } {
   if (runs.length === 0)
-    return { tone: "bg-tx3", label: "Awaiting first pull", sub: "Runs weekdays 11:00 UTC" };
+    return { tone: "bg-tx3", label: "Awaiting first pull", sub: "Sweeps daily 11:00 & 23:00 UTC" };
   if (runs.some((r) => r.status === "error"))
     return { tone: "bg-danger", label: "Pipeline needs attention", sub: "A source failed — see Command" };
   if (runs.some((r) => r.status === "partial"))
     return { tone: "bg-warn", label: "Pipeline degraded", sub: "A source returned partial data" };
-  return { tone: "animate-pulse-dot bg-ok", label: "Pipeline healthy", sub: "Next pull · weekdays 11:00 UTC" };
+  return { tone: "animate-pulse-dot bg-ok", label: "Pipeline healthy", sub: "Sweeps daily · 11:00 & 23:00 UTC" };
 }
 
 function SidebarBody({ expanded, showCollapse }: { expanded: boolean; showCollapse?: boolean }) {

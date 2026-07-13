@@ -2,11 +2,12 @@ name = "lienwolf"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 
-# Daily ingestion (weekdays 11:00 UTC, pre-market US) + a light tick every
-# 10 minutes that only advances running historical backfills (no-op cost
-# when none are running).
+# Twice-daily sweeps (11:00 & 23:00 UTC, every day — recorders publish on
+# weekends too) seed the pull queue; the 10-minute tick drains a bounded
+# slice per invocation (free-tier subrequest safety) and advances running
+# historical backfills whenever no pulls are pending.
 [triggers]
-crons = ["0 11 * * 1-5", "*/10 * * * *"]
+crons = ["0 11 * * *", "0 23 * * *", "*/10 * * * *"]
 
 # Single deploy: the Worker serves the built frontend as static assets and
 # handles /api/* itself. SPA fallback keeps client-side view routing working.

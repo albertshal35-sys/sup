@@ -426,6 +426,16 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
 CREATE INDEX IF NOT EXISTS idx_ingestion_recent ON ingestion_runs(started_at DESC);
 
 -- ------------------------------------------------------------
+-- Pull queue: twice-daily crons seed it, the 10-minute tick
+-- drains a bounded slice per invocation (free-tier subrequest
+-- safety — mirrors migration 0010).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pull_queue (
+  connector   TEXT PRIMARY KEY,
+  enqueued_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ------------------------------------------------------------
 -- Default NYC source endpoints for fresh installs (mirrors
 -- migrations 0006 + 0009; connectors stay disabled until enabled).
 -- ------------------------------------------------------------
@@ -433,8 +443,8 @@ UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/
   notes='DOB NOW Build job filings (New Building + full Demolition only — other job types are on the legacy DOB Job Application Filings dataset, ic3t-wcy2). Ground-up = New Building (NB); structural = Alteration CO (ALT-CO/ALT1). For actual permit ISSUANCE events (construction start, not application), the companion dataset is DOB Permit Issuance (data.cityofnewyork.us/resource/ipu4-2q9a.json). Free Socrata app token recommended for volume.'
   WHERE id='permits' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/6bgk-3dad.json' WHERE id='violations' AND base_url IS NULL AND scrape_url IS NULL;
-UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/9rz4-mjek.json',
-  notes='NYC''s 2026 tax lien sale is currently SUSPENDED pending a transition to a NYC Land Bank (targeted 2029) — this annual sale-list dataset will likely stay empty or stale until sales resume; that is expected, not a broken connector. For a live signal now, point this connector''s base_url at the ACRIS Master (https://data.cityofnewyork.us/resource/bnx9-e6tj.json) instead, run "Discover ACRIS doc types" in Test source, and filter on the NYC/Federal Tax Lien code — recorded tax liens are still ongoing even with the sale paused.'
+UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json',
+  notes='Recorded NYC/Federal tax liens via the ACRIS join (Master + Legals + Parties). The doc_type filter resolves automatically from the city''s code table on first pull and appears in the field map, where you can adjust it. (The DOF lien-sale list 9rz4-mjek is frozen while NYC''s lien sale is suspended pending the Land Bank transition — recorded tax liens keep flowing regardless.)'
   WHERE id='tax_liens' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.ny.gov/resource/n9v6-gdp6.json' WHERE id='corp_registry' AND base_url IS NULL AND scrape_url IS NULL;
 UPDATE connector_config SET mode='api', base_url='https://data.cityofnewyork.us/resource/bnx9-e6tj.json' WHERE id IN ('county_deeds','county_loans','satisfactions') AND base_url IS NULL AND scrape_url IS NULL;

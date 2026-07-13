@@ -447,7 +447,7 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
       )}
 
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2.5">
-        <span className="text-2xs text-tx3">Runs weekdays 11:00 UTC · 3 retries · gated & audited</span>
+        <span className="text-2xs text-tx3">Sweeps daily 11:00 & 23:00 UTC · 3 retries · gated & audited</span>
         <div className="flex items-center gap-1.5">
           <button
             disabled={busy}
@@ -472,6 +472,135 @@ function ConnectorCard({ connector, onChanged }: { connector: ConnectorInfo; onC
         </div>
       </div>
       </>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------- pipeline doctor --------------------------- */
+
+const FEED_TITLES: Record<string, string> = {
+  maturity: "Maturities",
+  cash_poor: "Cash-Poor",
+  permit: "Permits",
+  lien: "Distress",
+};
+
+const DOCTOR_LABELS: Record<string, string> = {
+  county_deeds: "County deeds",
+  county_loans: "County loans",
+  permits: "Permits",
+  liens: "Mechanics liens",
+  lis_pendens: "Lis pendens",
+  violations: "Violations",
+  tax_liens: "Tax liens",
+  auctions: "Auctions",
+  satisfactions: "Satisfactions",
+  ucc_filings: "UCC filings",
+  corp_registry: "Corp registry",
+  skip_trace: "Contact enrichment",
+};
+
+type DoctorReport = Extract<Awaited<ReturnType<typeof admin.pipelineDoctor>>, { ok: true }>["data"];
+
+/**
+ * One-click activation for every free NYC source + an honest per-tab
+ * explanation of why each feed is or isn't populating right now.
+ */
+function PipelineDoctor({ onChanged }: { onChanged: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const [report, setReport] = useState<DoctorReport | null>(null);
+  const [busy, setBusy] = useState<"activate" | "diagnose" | null>(null);
+
+  const diagnose = async () => {
+    setBusy("diagnose");
+    const res = await admin.pipelineDoctor();
+    if (res.ok) setReport(res.data);
+    else toast(`Diagnosis failed: ${res.error}`, "error");
+    setBusy(null);
+  };
+
+  return (
+    <div className="rounded-xl border border-accent/25 bg-accent/[0.04] p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-xs font-semibold text-tx1">Pipeline health</h4>
+          <p className="mt-0.5 max-w-md text-2xs text-tx3">
+            Activate every free NYC source in one click — enables connectors, resolves ACRIS
+            document filters, drafts field maps, starts 36-month backfills, and queues first
+            pulls. Diagnose explains, per tab, exactly why data is or isn&apos;t showing.
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            disabled={busy !== null}
+            onClick={async () => {
+              setBusy("activate");
+              const res = await admin.activateAllSources();
+              if (res.ok) {
+                const { enabled, backfills, pulls, notes } = res.data;
+                toast(
+                  `Sources activated — ${enabled.length} enabled, ${backfills.length} backfills started, ${pulls.length} pulls queued. First data lands within ~10 minutes.`
+                );
+                if (notes.length > 0) console.info("activate-all notes:", notes);
+                onChanged();
+                await diagnose();
+              } else {
+                toast(`Activation failed: ${res.error}`, "error");
+              }
+              setBusy(null);
+            }}
+            className="rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-2xs font-semibold text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
+          >
+            {busy === "activate" ? "Activating…" : "Activate all free sources"}
+          </button>
+          <button
+            disabled={busy !== null}
+            onClick={() => void diagnose()}
+            className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-2xs font-medium text-tx2 transition-colors hover:text-tx1 disabled:opacity-40"
+          >
+            {busy === "diagnose" ? "Checking…" : "Diagnose"}
+          </button>
+        </div>
+      </div>
+
+      {report && (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex flex-col gap-1 rounded-lg border border-line bg-surface px-3 py-2.5">
+            <span className="text-2xs font-semibold text-tx2">Why each tab looks the way it does</span>
+            {report.feeds.map((f) => (
+              <div key={f.kind} className="flex items-start gap-2 text-2xs">
+                <span className={f.ready ? "text-ok" : "text-warn"}>{f.ready ? "✓" : "○"}</span>
+                <span className="min-w-0">
+                  <span className="font-medium text-tx1">{FEED_TITLES[f.kind] ?? f.kind}:</span>{" "}
+                  <span className="break-words text-tx2">{f.detail}</span>
+                </span>
+              </div>
+            ))}
+            <span className="mt-0.5 text-2xs text-tx3">
+              {report.openTriggers.toLocaleString()} open signals across all feeds right now.
+            </span>
+          </div>
+          <div className="flex flex-col gap-1 rounded-lg border border-line bg-surface px-3 py-2.5">
+            <span className="text-2xs font-semibold text-tx2">Connector status</span>
+            {report.connectors.map((c) => (
+              <div key={c.id} className="flex items-start gap-2 text-2xs">
+                <span className={c.verdict === "healthy" ? "text-ok" : c.enabled ? "text-warn" : "text-tx3"}>
+                  {c.verdict === "healthy" ? "✓" : c.enabled ? "!" : "·"}
+                </span>
+                <span className="min-w-0">
+                  <span className="font-medium text-tx1">{DOCTOR_LABELS[c.id] ?? c.id}:</span>{" "}
+                  <span className="break-words text-tx2">{c.verdict}</span>
+                  {c.backfill && (
+                    <span className="text-tx3">
+                      {" "}· backfill {c.backfill.status} ({c.backfill.rowsTotal.toLocaleString()} rows)
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -670,6 +799,7 @@ export function SettingsView() {
       >
         {connectors ? (
           <div className="flex flex-col gap-4">
+            <PipelineDoctor onChanged={() => void refresh()} />
             {CONNECTOR_GROUPS.map((group) => {
               const cards = connectors.filter((c) => group.ids.includes(c.id));
               if (cards.length === 0) return null;

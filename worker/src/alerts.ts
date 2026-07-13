@@ -122,14 +122,27 @@ async function buildDigest(env: Env): Promise<{ subject: string; html: string } 
   return { subject, html };
 }
 
-/** Called at the end of every pipeline run. Quiet days send nothing. */
+/**
+ * Called whenever a pipeline sweep finishes draining. Quiet days send
+ * nothing, and at most one digest goes out per ~day — the pipeline sweeps
+ * twice daily, but the digest covers 26 hours, so a second same-day send
+ * would just repeat the morning email.
+ */
 export async function maybeSendDigest(env: Env): Promise<void> {
   const cfg = await getAlertConfig(env);
   if (!cfg.enabled || !cfg.email || !env.RESEND_API_KEY) return;
+  const last = await env.DB.prepare(
+    "SELECT value FROM app_settings WHERE key = 'last_digest_at'"
+  ).first<{ value: string }>();
+  if (last?.value && Date.now() - new Date(last.value).getTime() < 20 * 3_600_000) return;
   const digest = await buildDigest(env);
   if (!digest) return;
   try {
     await sendEmail(env, cfg.email, digest.subject, digest.html);
+    await env.DB.prepare(
+      `INSERT INTO app_settings (key, value) VALUES ('last_digest_at', ?1)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+    ).bind(new Date().toISOString()).run();
   } catch (err) {
     console.warn("digest send failed", err);
   }

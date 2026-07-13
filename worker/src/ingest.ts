@@ -1,5 +1,6 @@
 /**
- * Ingestion pipeline (cron: weekdays 11:00 UTC, or on demand via admin API).
+ * Ingestion pipeline (queue-seeded by daily 11:00/23:00 UTC crons, drained
+ * by the 10-minute tick, or on demand via the admin API).
  *
  * Every connector runs in one of two modes, configured from Settings:
  *
@@ -553,8 +554,10 @@ export async function acquireAndIngest(
       from: new Date(Date.now() - lookbackDays * 86_400_000).toISOString().slice(0, 10),
       to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
     };
-    if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id, Boolean(cfg.fieldMap?.where))) {
+    if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
       // NYC ACRIS: native three-dataset join (Master + Legals + Parties).
+      // Lien-family connectors resolve their doc_type codes from the city's
+      // code table on first pull; the filter persists to the field map.
       const result = await acrisFetch(env, cfg, w);
       raw = result.raw;
       rows = result.rows;
@@ -672,17 +675,80 @@ export async function runSingleConnector(env: Env, id: string): Promise<boolean>
   return true;
 }
 
-export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promise<void> {
-  console.log(`ingestion pipeline start ${scheduledFor.toISOString()}`);
-  const markets = await getMarkets(env);
+/* ----------------------- background work queue ----------------------- */
 
+/**
+ * Workers cap upstream fetches per invocation (50 on the Free plan), and a
+ * single ACRIS-join pull costs up to ~9. Running every connector inside one
+ * cron invocation therefore fails silently partway through once enough
+ * sources are enabled — the connectors that happen to run first ingest fine
+ * and the rest never do, which reads as "the pipeline is broken" with no
+ * error anywhere. So the pipeline never does that: the twice-daily cron
+ * only *seeds* a queue, and the existing 10-minute tick drains a couple of
+ * pulls per invocation, each safely inside the budget. Analytics (scoring,
+ * custom signals, entity resolution, digest) run once, when the queue
+ * empties.
+ */
+const PULLS_PER_TICK = 2;
+
+/** Enqueue every runnable connector for a pull; self-heal missing backfills. */
+export async function seedDailyPulls(env: Env): Promise<number> {
+  const { backfillEligible, startBackfill } = await import("./backfill");
+  let queued = 0;
   for (const id of CONNECTOR_IDS) {
     if (id === "skip_trace") continue; // Apollo enrichment is on-demand only — credits are never spent in bulk
     const cfg = await getConnectorConfig(env, id);
     if (!connectorRunnable(cfg)) continue; // not yet configured — skip silently
-    await runWithAudit(env, id, () => runConnector(env, cfg, markets));
+    const res = await env.DB.prepare(
+      "INSERT OR IGNORE INTO pull_queue (connector, enqueued_at) VALUES (?1, datetime('now'))"
+    ).bind(id).run();
+    if (res.meta.changes) queued++;
+
+    // Self-heal: an enabled, eligible connector should always have its
+    // 36-month history crawling without a per-connector Start click. Only
+    // never-started connectors are picked up — done/error states are left
+    // for the operator (restarting an errored crawl in a loop would just
+    // hammer a broken source).
+    const state = await env.DB.prepare(
+      "SELECT status FROM backfill_state WHERE connector = ?1"
+    ).bind(id).first<{ status: string }>();
+    if (!state && (await backfillEligible(env, id))) await startBackfill(env, id);
+  }
+  console.log(`seeded ${queued} daily pulls`);
+  return queued;
+}
+
+/**
+ * One bounded slice of background work, called by every 10-minute tick:
+ * drain up to PULLS_PER_TICK queued pulls; when the queue is empty, advance
+ * running backfills instead. Queue rows are deleted before running so a
+ * connector that crashes the invocation can't wedge the queue.
+ */
+export async function processBackgroundWork(env: Env): Promise<void> {
+  const pending = await env.DB.prepare(
+    "SELECT connector FROM pull_queue ORDER BY enqueued_at LIMIT ?1"
+  ).bind(PULLS_PER_TICK).all<{ connector: string }>();
+
+  if (pending.results.length === 0) {
+    const { continueBackfills } = await import("./backfill");
+    await continueBackfills(env);
+    return;
   }
 
+  const markets = await getMarkets(env);
+  for (const p of pending.results) {
+    await env.DB.prepare("DELETE FROM pull_queue WHERE connector = ?1").bind(p.connector).run();
+    const cfg = await getConnectorConfig(env, p.connector);
+    if (!connectorRunnable(cfg)) continue;
+    await runWithAudit(env, p.connector, () => runConnector(env, cfg, markets));
+  }
+
+  const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM pull_queue").first<{ n: number }>();
+  if ((left?.n ?? 0) === 0) await runPipelineTail(env);
+}
+
+/** Scoring + analytics tail — runs when a seeded sweep finishes draining. */
+export async function runPipelineTail(env: Env): Promise<void> {
   await runWithAudit(env, "scoring", async () => ({
     ingested: await rescoreTriggers(env),
     skipped: 0,
@@ -702,6 +768,16 @@ export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promis
   }));
 
   await maybeSendDigest(env);
+}
+
+/**
+ * Manual "Run full pipeline now": seed the queue and drain the first slice
+ * immediately; the 10-minute tick finishes the rest within the hour.
+ */
+export async function runIngestionPipeline(env: Env, scheduledFor: Date): Promise<void> {
+  console.log(`ingestion pipeline start ${scheduledFor.toISOString()}`);
+  await seedDailyPulls(env);
+  await processBackgroundWork(env);
 
   console.log("ingestion pipeline complete");
 }

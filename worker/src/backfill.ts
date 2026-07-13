@@ -35,7 +35,7 @@ export async function backfillEligible(env: Env, id: string): Promise<boolean> {
   if (!RECORD_CONNECTORS[id]) return false;
   const cfg = await getConnectorConfig(env, id);
   if (!cfg.enabled || cfg.mode !== "api" || !cfg.baseUrl) return false;
-  if (isAcrisMaster(cfg.baseUrl) && acrisCapable(id, Boolean(cfg.fieldMap?.where))) return true;
+  if (isAcrisMaster(cfg.baseUrl) && acrisCapable(id)) return true; // lien-family codes resolve at pull time
   return !isSocrataUrl(cfg.baseUrl) || Boolean(cfg.fieldMap?.dateField);
 }
 
