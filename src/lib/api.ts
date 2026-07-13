@@ -520,6 +520,20 @@ export const admin = {
   runConnector: (id: string) =>
     adminFetch<{ ok: boolean }>(`/connectors/${id}/run`, { method: "POST" }),
   runAll: () => adminFetch<{ ok: boolean }>("/run-ingestion", { method: "POST" }),
+  activateAllSources: () =>
+    adminFetch<{ ok: boolean; enabled: string[]; backfills: string[]; pulls: string[]; notes: string[] }>(
+      "/sources/activate-all", { method: "POST" }
+    ),
+  pipelineDoctor: () =>
+    adminFetch<{
+      connectors: Array<{
+        id: string; enabled: boolean; mode: string; verdict: string; queued: boolean;
+        lastRun: { status: string; finished_at: string | null; rows_ingested: number; rows_skipped: number; error: string | null } | null;
+        backfill: { status: string; rowsTotal: number; error: string | null } | null;
+      }>;
+      feeds: Array<{ kind: string; ready: boolean; detail: string }>;
+      openTriggers: number;
+    }>("/pipeline/doctor"),
   saveSettings: (patch: {
     dataMode?: "demo" | "live";
     markets?: string[];

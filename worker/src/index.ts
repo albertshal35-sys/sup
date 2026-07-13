@@ -18,8 +18,7 @@
  */
 
 import { routeRequest } from "./routes";
-import { runIngestionPipeline } from "./ingest";
-import { continueBackfills } from "./backfill";
+import { processBackgroundWork, seedDailyPulls } from "./ingest";
 
 export interface Env {
   DB: D1Database;
@@ -72,15 +71,15 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // The 10-minute tick only advances running historical backfills, so a
-    // started crawl finishes on its own without any clicking. The daily
-    // weekday cron runs the full ingestion + scoring pipeline.
+    // Twice-daily crons only SEED the pull queue; the 10-minute tick drains
+    // a bounded slice per invocation (Workers cap subrequests per invocation,
+    // so pulls are spread out instead of run all at once) and advances
+    // running backfills whenever no pulls are pending. Scoring and the rest
+    // of the analytics tail fire when a sweep finishes draining.
     if (controller.cron === "*/10 * * * *") {
-      ctx.waitUntil(continueBackfills(env));
+      ctx.waitUntil(processBackgroundWork(env));
       return;
     }
-    ctx.waitUntil(
-      runIngestionPipeline(env, new Date(controller.scheduledTime)).then(() => continueBackfills(env))
-    );
+    ctx.waitUntil(seedDailyPulls(env).then(() => processBackgroundWork(env)));
   },
 };

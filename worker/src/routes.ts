@@ -6,7 +6,7 @@ import {
   RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
   getMarkets, socrataFetch, vendorFetch, vendorUrl, connectorAuthHeaders,
 } from "./ingest";
-import { acrisCapable, acrisFetch, discoverDocTypes, isAcrisMaster } from "./acris";
+import { acrisCapable, acrisFetch, discoverDocTypes, isAcrisMaster, resolveAcrisDocTypes } from "./acris";
 import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
@@ -676,15 +676,21 @@ route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
       push("Page preview", true, md.slice(0, 350).replace(/\n+/g, " "));
       rows = (await extractRecords(env, cfg.id, md, markets, cfg.notes)) as Record<string, unknown>[];
       push("AI extraction", rows.length > 0, `${rows.length} candidate record(s) extracted${rows.length === 0 ? " — the page may be a search form or list without record details; give the AI hints in notes, or link directly to a results page" : ""}`);
-    } else if (isAcrisMaster(cfg.baseUrl)) {
-      if (acrisCapable(cfg.id, Boolean(cfg.fieldMap?.where))) {
-        const r = await acrisFetch(env, cfg, w);
-        rows = r.rows;
-        push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
-        if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
-      } else {
-        push("Note", false, 'This connector has no doc_type filter yet — set one in the field-map "where" box below, e.g. doc_type = \'XYZ\'. See "ACRIS doc types in window" below for the real codes.');
+    } else if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
+      if (!cfg.fieldMap?.where) {
+        // Lien-family connectors resolve their doc_type codes from the
+        // city's code table; narrate the outcome so a resolution failure
+        // is visible instead of a silent 0.
+        const resolved = await resolveAcrisDocTypes(env, cfg).catch((err) => {
+          push("Resolve doc types", false, String(err instanceof Error ? err.message : err));
+          return null;
+        });
+        if (resolved) push("Resolve doc types", true, `matched in Document Control Codes: ${resolved} (saved to field map)`);
       }
+      const r = await acrisFetch(env, cfg, w);
+      rows = r.rows;
+      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
+      if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
       try {
         const types = await discoverDocTypes(cfg, w);
         push("ACRIS doc types in window", types.length > 0,
@@ -1006,58 +1012,230 @@ route("POST", "/api/admin/backfill/:id/chunk", async (_req, env, params) => {
 
 /* ------------------------ Socrata field auto-mapping ------------------------ */
 
-route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => {
-  if (!aiAvailable(env)) return json({ error: "ai_not_configured" }, env, 503);
-  const shape = recordShape(params.id);
-  if (!shape) return json({ error: "unknown_connector" }, env, 404);
-  const cfg = await getConnectorConfig(env, params.id);
-  if (!cfg.baseUrl || !isSocrataUrl(cfg.baseUrl)) return json({ error: "not_a_socrata_source" }, env, 409);
+/** AI-draft a Socrata field map for one connector. Shared by the per-connector automap route and activate-all. */
+async function autoMapConnector(
+  env: Env,
+  id: string
+): Promise<{ ok: true; fieldMap: unknown } | { ok: false; error: string; detail?: string; status: number }> {
+  if (!aiAvailable(env)) return { ok: false, error: "ai_not_configured", status: 503 };
+  const shape = recordShape(id);
+  if (!shape) return { ok: false, error: "unknown_connector", status: 404 };
+  const cfg = await getConnectorConfig(env, id);
+  if (!cfg.baseUrl || !isSocrataUrl(cfg.baseUrl)) return { ok: false, error: "not_a_socrata_source", status: 409 };
 
   const sampleRes = await fetch(`${cfg.baseUrl}?$limit=3`, {
     headers: cfg.apiKey ? { "X-App-Token": cfg.apiKey } : {},
   });
-  if (!sampleRes.ok) return json({ error: `sample_fetch_${sampleRes.status}` }, env, 502);
+  if (!sampleRes.ok) return { ok: false, error: `sample_fetch_${sampleRes.status}`, status: 502 };
   const sample = (await sampleRes.text()).slice(0, 12_000);
 
   let text: string;
   try {
     text = await runModel(
-    env,
-    [
-      {
-        role: "system",
-        content:
-          "You map an open-data dataset's field names onto a target record shape. Given sample rows, return ONLY a JSON object: " +
-          '{"dateField": "<the dataset field to filter/order by date>", "where": <SoQL filter string or null>, "map": {<targetField>: <datasetField or "=CONSTANT">}} ' +
-          "covering every target field you can. Use \"=NY\"-style constants for fixed values the dataset implies but does not carry. " +
-          'Use "where" to restrict multi-purpose datasets to the relevant records (e.g. "doc_type = \'MTGE\'"). ' +
-          "Target shape:\n" + shape,
-      },
-      { role: "user", content: sample },
-    ],
-    1024
-  );
+      env,
+      [
+        {
+          role: "system",
+          content:
+            "You map an open-data dataset's field names onto a target record shape. Given sample rows, return ONLY a JSON object: " +
+            '{"dateField": "<the dataset field to filter/order by date>", "where": <SoQL filter string or null>, "map": {<targetField>: <datasetField or "=CONSTANT">}} ' +
+            "covering every target field you can. Use \"=NY\"-style constants for fixed values the dataset implies but does not carry. " +
+            'Use "where" to restrict multi-purpose datasets to the relevant records (e.g. "doc_type = \'MTGE\'"). ' +
+            "Target shape:\n" + shape,
+        },
+        { role: "user", content: sample },
+      ],
+      1024
+    );
   } catch (err) {
-    return json({ error: "automap_failed", detail: String(err instanceof Error ? err.message : err).slice(0, 200) }, env, 502);
+    return { ok: false, error: "automap_failed", detail: String(err instanceof Error ? err.message : err).slice(0, 200), status: 502 };
   }
   const cleaned = text.replace(/```(?:json)?/g, "").trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start === -1 || end <= start) {
-    return json({ error: "automap_failed", detail: `model returned no JSON object: ${cleaned.slice(0, 140) || "(empty response)"}` }, env, 502);
+    return { ok: false, error: "automap_failed", detail: `model returned no JSON object: ${cleaned.slice(0, 140) || "(empty response)"}`, status: 502 };
   }
   let mapping: unknown;
   try {
     mapping = JSON.parse(cleaned.slice(start, end + 1));
   } catch {
-    return json({ error: "automap_failed" }, env, 502);
+    return { ok: false, error: "automap_failed", status: 502 };
   }
   await env.DB.prepare(
     "UPDATE connector_config SET field_map = ?1, updated_at = datetime('now') WHERE id = ?2"
   )
-    .bind(JSON.stringify(mapping), params.id)
+    .bind(JSON.stringify(mapping), id)
     .run();
-  return json({ ok: true, fieldMap: mapping }, env);
+  return { ok: true, fieldMap: mapping };
+}
+
+route("POST", "/api/admin/connectors/:id/automap", async (_req, env, params) => {
+  const res = await autoMapConnector(env, params.id);
+  if (!res.ok) return json({ error: res.error, ...(res.detail ? { detail: res.detail } : {}) }, env, res.status);
+  return json({ ok: true, fieldMap: res.fieldMap }, env);
+});
+
+/* ------------------- one-click source activation ------------------- */
+
+/**
+ * Enable every free NYC open-data source, resolve/auto-map whatever each
+ * one needs to actually pull (ACRIS doc codes, Socrata field maps), start
+ * missing 36-month backfills, and enqueue first pulls. One click from
+ * empty portal to data flowing — the 10-minute tick does the fetching.
+ */
+route("POST", "/api/admin/sources/activate-all", async (_req, env) => {
+  const FREE_SOURCES = [
+    "county_deeds", "county_loans", "satisfactions", "permits",
+    "violations", "corp_registry", "liens", "lis_pendens", "tax_liens",
+  ];
+  const enabled: string[] = [];
+  const backfills: string[] = [];
+  const pulls: string[] = [];
+  const notes: string[] = [];
+
+  for (const id of FREE_SOURCES) {
+    const cfg = await getConnectorConfig(env, id);
+    if (cfg.mode !== "api" || !cfg.baseUrl) {
+      notes.push(`${id}: skipped — no API endpoint configured`);
+      continue;
+    }
+    if (!cfg.enabled) {
+      await env.DB.prepare(
+        "UPDATE connector_config SET enabled = 1, updated_at = datetime('now') WHERE id = ?1"
+      ).bind(id).run();
+      cfg.enabled = true;
+      enabled.push(id);
+    }
+
+    // Make the connector actually pullable, not just switched on.
+    try {
+      if (isAcrisMaster(cfg.baseUrl) && acrisCapable(id)) {
+        if (!cfg.fieldMap?.where && !["county_deeds", "county_loans", "satisfactions"].includes(id)) {
+          const where = await resolveAcrisDocTypes(env, cfg);
+          if (where) notes.push(`${id}: doc types resolved → ${where}`);
+          else notes.push(`${id}: could not match doc types in the ACRIS code table — run Test source for the code list`);
+        }
+      } else if (isSocrataUrl(cfg.baseUrl) && !cfg.fieldMap?.dateField) {
+        const res = await autoMapConnector(env, id);
+        notes.push(res.ok ? `${id}: field map drafted by AI` : `${id}: auto-map failed (${res.error}) — map it in Settings`);
+      }
+    } catch (err) {
+      notes.push(`${id}: setup error — ${String(err instanceof Error ? err.message : err).slice(0, 140)}`);
+    }
+
+    const state = await env.DB.prepare(
+      "SELECT status FROM backfill_state WHERE connector = ?1"
+    ).bind(id).first<{ status: string }>();
+    if (!state && (await backfillEligible(env, id))) {
+      if (await startBackfill(env, id)) backfills.push(id);
+    }
+    const q = await env.DB.prepare(
+      "INSERT OR IGNORE INTO pull_queue (connector, enqueued_at) VALUES (?1, datetime('now'))"
+    ).bind(id).run();
+    if (q.meta.changes) pulls.push(id);
+  }
+
+  return json({ ok: true, enabled, backfills, pulls, notes }, env);
+});
+
+/* --------------------------- pipeline doctor --------------------------- */
+
+/**
+ * One honest answer to "why is this tab empty?" — walks every connector's
+ * config/run/backfill state and checks each feed's data prerequisites
+ * against what is actually in the database right now.
+ */
+route("GET", "/api/admin/pipeline/doctor", async (_req, env) => {
+  const connectors: Array<Record<string, unknown>> = [];
+  for (const id of CONNECTOR_IDS) {
+    const cfg = await getConnectorConfig(env, id);
+    const lastRun = await env.DB.prepare(
+      `SELECT status, finished_at, rows_ingested, rows_skipped, error FROM ingestion_runs
+       WHERE connector = ?1 ORDER BY started_at DESC LIMIT 1`
+    ).bind(id).first<{ status: string; finished_at: string | null; rows_ingested: number; rows_skipped: number; error: string | null }>();
+    const bf = await env.DB.prepare(
+      "SELECT status, rows_total, error FROM backfill_state WHERE connector = ?1"
+    ).bind(id).first<{ status: string; rows_total: number; error: string | null }>();
+    const queued = await env.DB.prepare(
+      "SELECT 1 AS q FROM pull_queue WHERE connector = ?1"
+    ).bind(id).first<{ q: number }>();
+
+    let verdict: string;
+    if (id === "skip_trace") verdict = cfg.apiKey
+      ? "on-demand — enriches from the Enrich button on borrower resumes, never scheduled"
+      : "needs an Apollo API key before the Enrich button works";
+    else if (!cfg.enabled) verdict = "disabled — enable it (or use Activate all free sources) before expecting rows";
+    else if (cfg.mode === "api" && !cfg.baseUrl) verdict = "enabled but has no API URL";
+    else if (cfg.mode === "scrape" && !cfg.scrapeUrl) verdict = "enabled but has no scrape URL";
+    else if (lastRun?.status === "failed") verdict = `last run FAILED: ${lastRun.error ?? "unknown error"}`;
+    else if (!lastRun) verdict = queued ? "queued — first pull runs within ~10 minutes" : "never ran — queued at the next sweep (11:00/23:00 UTC) or use Run now";
+    else if (lastRun.rows_ingested === 0 && (lastRun.rows_skipped ?? 0) > 0) verdict = `pulling but everything was skipped/quarantined last run (${lastRun.rows_skipped} rows) — check Data quality`;
+    else verdict = "healthy";
+
+    connectors.push({
+      id, enabled: cfg.enabled, mode: cfg.mode, verdict,
+      lastRun: lastRun ?? null,
+      backfill: bf ? { status: bf.status, rowsTotal: bf.rows_total, error: bf.error } : null,
+      queued: Boolean(queued),
+    });
+  }
+
+  const c = await env.DB.prepare(
+    `SELECT
+      (SELECT COUNT(*) FROM loans WHERE status='active' AND lender_type IN ('private','hard_money')) AS private_loans,
+      (SELECT COUNT(*) FROM loans WHERE status='active' AND lender_type IN ('private','hard_money')
+         AND originated_at BETWEEN date('now','-10 months') AND date('now','-8 months')) AS maturing_window,
+      (SELECT COUNT(*) FROM loans) AS loans_total,
+      (SELECT COUNT(*) FROM transactions WHERE is_cash=1 AND side='purchase' AND recorded_at >= date('now','-60 days')) AS cash_60d,
+      (SELECT COUNT(*) FROM transactions) AS tx_total,
+      (SELECT COUNT(*) FROM permits WHERE filed_at >= date('now','-30 days') AND valuation >= 250000) AS permits_window,
+      (SELECT COUNT(*) FROM permits) AS permits_total,
+      (SELECT COUNT(*) FROM liens WHERE filed_at >= date('now','-45 days')) AS liens_window,
+      (SELECT COUNT(*) FROM liens) AS liens_total,
+      (SELECT COUNT(*) FROM triggers WHERE status NOT IN ('dismissed','converted')) AS open_triggers`
+  ).first<Record<string, number>>();
+
+  const feeds = [
+    {
+      kind: "maturity",
+      ready: (c?.maturing_window ?? 0) > 0,
+      detail:
+        (c?.loans_total ?? 0) === 0
+          ? "the loans table is empty — County loans (mortgages) has never ingested; it needs to be enabled + backfilled before any maturity signal can exist"
+          : (c?.private_loans ?? 0) === 0
+            ? `${c?.loans_total} loans on file but none are active private/hard-money notes`
+            : (c?.maturing_window ?? 0) === 0
+              ? `${c?.private_loans} active private notes on file, none originated 8–10 months ago (the refi window) — signals appear as history backfills or notes age into the window`
+              : `${c?.maturing_window} notes in the refi window`,
+    },
+    {
+      kind: "cash_poor",
+      ready: (c?.cash_60d ?? 0) >= 2,
+      detail:
+        (c?.tx_total ?? 0) === 0
+          ? "no deed transactions ingested yet"
+          : `${c?.cash_60d} all-cash purchases recorded in the last 60 days (needs ≥2 by the same entity; ACRIS publishes 2–4 weeks behind, so this window trails reality)`,
+    },
+    {
+      kind: "permit",
+      ready: (c?.permits_window ?? 0) > 0,
+      detail:
+        (c?.permits_total ?? 0) === 0
+          ? "the permits table is empty — the Permits connector has never ingested"
+          : `${c?.permits_window} qualifying permits (ground-up/structural ≥ $250k) filed in the last 30 days of ${c?.permits_total} total`,
+    },
+    {
+      kind: "lien",
+      ready: (c?.liens_window ?? 0) > 0,
+      detail:
+        (c?.liens_total ?? 0) === 0
+          ? "the liens table is empty — no distress connector (liens / lis pendens / violations / tax liens) has ingested yet"
+          : `${c?.liens_window} distress filings in the last 45 days of ${c?.liens_total} total`,
+    },
+  ];
+
+  return json({ connectors, feeds, openTriggers: c?.open_triggers ?? 0 }, env);
 });
 
 /* ------------------------ inbound webhooks ------------------------ */

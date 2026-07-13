@@ -164,7 +164,7 @@ Connectors come **pre-filled with real endpoints** (seeded by migrations
 | --- | --- | --- |
 | Permits | `data.cityofnewyork.us/resource/w9ak-ipjd.json` | DOB NOW: Build — Job Application Filings (NB/DM only; other job types are on the legacy `ic3t-wcy2` dataset) |
 | Violations | `data.cityofnewyork.us/resource/6bgk-3dad.json` | DOB ECB Violations (respondent + penalty) |
-| Tax liens | `data.cityofnewyork.us/resource/9rz4-mjek.json` | DOF Tax Lien Sale Lists — **NYC's 2026 sale is suspended** pending a Land Bank transition (targeted 2029); expect this one to look quiet until it resumes |
+| Tax liens | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | Recorded NYC/Federal tax liens via ACRIS (the DOF lien-*sale* list is frozen while NYC's lien sale is suspended pending the 2029 Land Bank transition) |
 | Corp registry | `data.ny.gov/resource/n9v6-gdp6.json` | NYS Active Corporations |
 | Deeds / loans / satisfactions | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | ACRIS Real Property Master — see caveat below |
 | Mechanic's liens / Lis pendens | `data.cityofnewyork.us/resource/bnx9-e6tj.json` | Also ACRIS — a recorded document type, not a scrape (see "Discover ACRIS doc types" below) |
@@ -180,18 +180,16 @@ auto-classified bank vs private by name, and all-cash purchases are
 detected by reconciling deeds against mortgage recordings on the same
 parcel.
 
-**Mechanic's liens and lis pendens are recorded ACRIS document types too**
-— not scrapes — but we deliberately don't ship a guessed `doc_type` code
-for them, because ACRIS's codes aren't documented anywhere reliable and a
-wrong guess would silently return 0 rows forever (the exact bug this
-covers). Instead: click **Test source** on either connector — the
-diagnostic runs a **"Discover ACRIS doc types"** step that samples the
-Master dataset for the last 45 days with no filter, groups by `doc_type`,
-and lists each code with its real count and (when available) description.
-Read off the right one and paste `doc_type = '<code>'` into that
-connector's field-map **where** box. The same trick works for any other
-ACRIS document class you want to add later (judgments, easements, etc.) —
-just point a connector's base URL at the Master dataset and run Discover.
+**Mechanic's liens, lis pendens, and tax liens are recorded ACRIS document
+types too** — not scrapes. Their `doc_type` filters are never guessed:
+on first pull each connector queries the city's own **Document Control
+Codes** dataset, matches its document class by description, and saves the
+resolved filter into the field map (visible and editable in Settings). If
+you ever want to verify or extend a filter, **Test source** narrates the
+resolution and its **"ACRIS doc types in window"** step lists every code
+actually recorded in the last 45 days with real counts — works for any
+other ACRIS document class you want to add later (judgments, easements,
+etc.).
 
 ACRIS covers Manhattan/Brooklyn/Queens/Bronx; Staten Island (Richmond
 County) records live with the Richmond County Clerk → use scrape mode.
@@ -237,14 +235,28 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
 
 ## 8. Schedule, backfill, and data quality
 
-- **Schedule** — the pipeline runs weekdays at **11:00 UTC** (~6/7am NYC),
-  set in `wrangler.toml` `[triggers]`. Each run: pull all enabled sources →
-  validation gates → scoring → custom signals → entity resolution → digest.
-- **Historical backfill** — Settings → Historical backfill. Click *Start
-  36-mo crawl* per eligible source (enabled, API mode, mapped). Click *Start* once:
-  it pulls a few chunks immediately, then the Worker continues the crawl
-  automatically in the background every 10 minutes until complete. Scraped
-  portals can't be backfilled (a page has no history).
+- **One-click activation** — Settings → Data sources → **Activate all free
+  sources** enables every free NYC connector, resolves ACRIS document
+  filters from the city's code table, drafts Socrata field maps with AI,
+  starts 36-month backfills, and queues first pulls. Data starts flowing
+  within ~10 minutes of one click.
+- **Schedule** — sweeps run **every day at 11:00 and 23:00 UTC**, set in
+  `wrangler.toml` `[triggers]`. A sweep only *seeds* a pull queue; the
+  10-minute background tick drains a couple of connectors per invocation.
+  (Workers cap upstream fetches per invocation — 50 on the Free plan, and
+  one ACRIS join costs ~9 — so running everything in one invocation would
+  silently fail partway. Spreading pulls across ticks keeps every connector
+  inside the budget no matter how many are enabled.) Scoring, custom
+  signals, entity resolution, and the digest run when the queue drains.
+- **Historical backfill** — Settings → Historical backfill, or automatic:
+  any enabled, eligible source that has never crawled is auto-started at
+  the next sweep. Crawls advance in the background every 10 minutes until
+  they reach −36 months. Scraped portals can't be backfilled (a page has
+  no history).
+- **Pipeline doctor** — Settings → Data sources → **Diagnose** explains,
+  per feed tab, exactly why it is or isn't populating (e.g. "the loans
+  table is empty — County loans has never ingested"), plus a per-connector
+  verdict (disabled / failed with error / pulling but quarantining / healthy).
 - **Data quality** — Settings → Data quality shows 7-day ingest/quarantine
   counts, records awaiting review (approve = ingest, discard = drop),
   duplicate-borrower merge suggestions, and source anomaly warnings when a
@@ -297,6 +309,7 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Deploy Action fails on wrangler | Node < 22 or missing GitHub secrets (section 3) |
 | Data Pipeline widget says "no pulls yet" | Expected until at least one connector is enabled and has run |
 | Records missing that you expected | Check Settings → Data quality — they may be quarantined (outside markets, failed a sanity gate, or failed grounding) |
-| Nothing populates at all, connectors look configured | Connectors are **disabled by default** — a seeded/correct endpoint does nothing until you flip the toggle on in Settings and either wait for the weekday cron or click *Run now* |
-| ACRIS-backed connector (liens/lis pendens) always returns 0 rows | It ships with no `doc_type` filter on purpose — click *Test source*, read the **"ACRIS doc types in window"** line for the real code, then paste `doc_type = '<code>'` into that connector's field-map *where* box |
-| Tax lien connector is empty | NYC's 2026 tax lien sale is suspended citywide — not a config problem; see the connector's notes for a live ACRIS-based alternative |
+| Nothing populates at all, connectors look configured | Connectors are **disabled by default** — use **Activate all free sources** (Settings → Data sources), which enables, maps, backfills, and queues everything in one click |
+| A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
+| ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
+| Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |
