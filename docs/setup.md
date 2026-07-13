@@ -240,8 +240,10 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
   filters from the city's code table, drafts Socrata field maps with AI,
   starts 36-month backfills, and queues first pulls. Data starts flowing
   within ~10 minutes of one click.
-- **Schedule** — sweeps run **every day at 11:00 and 23:00 UTC**, set in
-  `wrangler.toml` `[triggers]`. A sweep only *seeds* a pull queue; the
+- **Schedule** — sweeps run **every day at 11:00 and 23:00 UTC**. Only one
+  cron trigger is registered (`*/10 * * * *` in `wrangler.toml` — Cloudflare
+  caps schedules per account on the Free plan); the tick computes the sweep
+  boundaries in code. A sweep only *seeds* a pull queue; the
   10-minute background tick drains a couple of connectors per invocation.
   (Workers cap upstream fetches per invocation — 50 on the Free plan, and
   one ACRIS join costs ~9 — so running everything in one invocation would

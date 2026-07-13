@@ -18,7 +18,7 @@
  */
 
 import { routeRequest } from "./routes";
-import { processBackgroundWork, seedDailyPulls } from "./ingest";
+import { maybeSeedDailyPulls, processBackgroundWork } from "./ingest";
 
 export interface Env {
   DB: D1Database;
@@ -70,16 +70,14 @@ export default {
     }
   },
 
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Twice-daily crons only SEED the pull queue; the 10-minute tick drains
-    // a bounded slice per invocation (Workers cap subrequests per invocation,
-    // so pulls are spread out instead of run all at once) and advances
-    // running backfills whenever no pulls are pending. Scoring and the rest
-    // of the analytics tail fire when a sweep finishes draining.
-    if (controller.cron === "*/10 * * * *") {
-      ctx.waitUntil(processBackgroundWork(env));
-      return;
-    }
-    ctx.waitUntil(seedDailyPulls(env).then(() => processBackgroundWork(env)));
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // One cron, everything in code: each 10-minute tick seeds the pull
+    // queue when a sweep boundary (11:00/23:00 UTC) has passed, then
+    // drains a bounded slice per invocation (Workers cap subrequests per
+    // invocation, so pulls are spread out instead of run all at once) and
+    // advances running backfills whenever no pulls are pending. Scoring
+    // and the rest of the analytics tail fire when a sweep finishes
+    // draining.
+    ctx.waitUntil(maybeSeedDailyPulls(env).then(() => processBackgroundWork(env)));
   },
 };
