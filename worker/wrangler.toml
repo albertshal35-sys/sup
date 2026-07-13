@@ -2,12 +2,15 @@ name = "lienwolf"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 
-# Twice-daily sweeps (11:00 & 23:00 UTC, every day — recorders publish on
-# weekends too) seed the pull queue; the 10-minute tick drains a bounded
-# slice per invocation (free-tier subrequest safety) and advances running
+# Single cron: the 10-minute tick does everything. Sweep seeding (11:00 &
+# 23:00 UTC boundaries) is computed in code on each tick, so only one
+# schedule is registered — Cloudflare caps cron triggers per account on
+# the Free plan, and a 3-schedule deploy was rejected. The tick seeds the
+# pull queue when a sweep boundary passes, drains a bounded slice per
+# invocation (free-tier subrequest safety), and advances running
 # historical backfills whenever no pulls are pending.
 [triggers]
-crons = ["0 11 * * *", "0 23 * * *", "*/10 * * * *"]
+crons = ["*/10 * * * *"]
 
 # Single deploy: the Worker serves the built frontend as static assets and
 # handles /api/* itself. SPA fallback keeps client-side view routing working.

@@ -691,6 +691,37 @@ export async function runSingleConnector(env: Env, id: string): Promise<boolean>
  */
 const PULLS_PER_TICK = 2;
 
+/**
+ * Sweep slots are computed in code because only ONE cron trigger is
+ * registered (Cloudflare caps schedules per account on the Free plan —
+ * registering separate 11:00/23:00 crons made the whole trigger deploy
+ * fail). Each UTC day has two sweep boundaries, 11:00 and 23:00; the
+ * 10-minute tick seeds the queue the first time it runs inside a new
+ * slot, which also self-recovers after downtime.
+ */
+function currentSweepSlot(now = new Date()): string {
+  const day = now.toISOString().slice(0, 10);
+  const hour = now.getUTCHours();
+  if (hour >= 23) return `${day}:23`;
+  if (hour >= 11) return `${day}:11`;
+  const prev = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  return `${prev}:23`;
+}
+
+/** Seed the queue once per sweep slot; no-op (one cheap read) otherwise. */
+export async function maybeSeedDailyPulls(env: Env): Promise<void> {
+  const slot = currentSweepSlot();
+  const last = await env.DB.prepare(
+    "SELECT value FROM app_settings WHERE key = 'last_sweep_slot'"
+  ).first<{ value: string }>();
+  if (last?.value === slot) return;
+  await env.DB.prepare(
+    `INSERT INTO app_settings (key, value) VALUES ('last_sweep_slot', ?1)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+  ).bind(slot).run();
+  await seedDailyPulls(env);
+}
+
 /** Enqueue every runnable connector for a pull; self-heal missing backfills. */
 export async function seedDailyPulls(env: Env): Promise<number> {
   const { backfillEligible, startBackfill } = await import("./backfill");
