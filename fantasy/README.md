@@ -25,8 +25,9 @@ bye weeks, and risk flags. The prices sum to the money in the room: 12 teams × 
 $2,400 on the board, so a player's price is his share of the league's budget.
 
 **Auction Room** — log every sale as it happens, yours and everyone else's. It tracks your
-budget, your maximum legal bid, and the live inflation rate, then tells you what each
-player is worth *right now* and the most you should pay.
+budget, your maximum legal bid, the live inflation rate, and what your room has actually
+been paying for each position against list — then tells you what a player is worth *right
+now*, the most you should pay, and which position your money is stretching furthest in.
 
 ## How the numbers were built
 
@@ -42,18 +43,18 @@ kicking — re-scored under the league's exact rules.
 4. **Project** — one gradient-boosted model per position for points per game, a second for
    games played, blended 75/25 with last season's actual points (`project2026.py`).
 5. **Replay history** — strategies compete against each other across replayed seasons using
-   real weekly scores and optimal weekly lineups (`simulate.py` for snake, `auction_sim.py`
-   for auction).
-6. **Control every positional claim** — before believing a premium, run the same premium on
-   a different position and check that its mirror moves the other way
-   (`tilt_test.py`, `tilt_confirm.py`, `weight_sweep.py`).
+   real weekly scores, with lineups set up front rather than with hindsight
+   (`auction_sim_real.py`).
+6. **Control every claim** — before believing any edge, re-run it against a different room.
+   A real edge survives; a crowding trade flips sign (`field_test.py`, `qb_density.py`).
 
 ### The findings that shaped the board
 
 **The two-quarterback rule is the league.** Starting two QBs drags replacement level from
 QB13 down to QB25, which adds about **85 points** of value to the top quarterback compared
-to a standard league. Twenty-four QBs start every week and roughly thirty-two exist. In the
-simulations, waiting on quarterback was the single most damaging thing a team could do.
+to a standard league. Twenty-four QBs start every week and roughly thirty-two exist, which
+is why about a fifth of your budget belongs at the position. Note what this does *not*
+license: see the quarterback premium below, which failed its own test.
 
 **Buy volume, never touchdowns.** Carries and targets are the stickiest things a player
 owns (year-over-year rank correlation ≈ 0.72–0.74). Yards per carry (0.24) and touchdowns
@@ -78,42 +79,70 @@ the room.
 That lands at roughly **20% of your money on quarterbacks, 27% on backs, 39% on receivers,
 11% on tight ends, and 2% on kicker and defense combined.**
 
-### What the auction study found
+### Custom statistics
+
+Four statistics built here that you will not find on a ranking site. All four count a
+missed week as a zero, because that is what your lineup scored.
+
+| | |
+|---|---|
+| **WAA** | *Wins Above Available.* Converts each week into the probability it wins you that week, then sums the season, measured against the best player available for a dollar. |
+| **Floor** | Share of weeks he outscored a typical starter at his position — how often he actually won you the slot. |
+| **Spike** | Share of weeks in the top decile of outcomes at his position. |
+| **Blank** | Share of weeks he gave you nothing at all. |
+
+WAA forecasts realised wins **better than projected points do** — 0.719 versus 0.670 rank
+correlation, winning all ten test seasons. And pricing an auction off it still **lost 7.2
+points of win rate.**
+
+That contradiction is the most useful thing in this repo. Your weekly score is a *sum*, and
+sums are linear, so a player's contribution to the team is simply his points. The win curve
+— the S-shaped map from score to victory — applies exactly once, when your total meets an
+opponent's. WAA applies it a second time to each player individually, which double-counts
+it and misprices everyone. So the board prices on points and carries WAA, Floor, Spike and
+Blank as descriptive columns for breaking ties and knowing what you are buying.
+
+### What the auction study found, and what it got wrong
 
 Twelve bidding strategies competed in replayed auctions across 2014–2025 — random
 nomination order, English bidding settled at second price plus a dollar, every team forced
-to finish with a legal roster and forbidden from bidding money it needs to fill its slots.
-Rosters were then scored on real weekly results with optimal weekly lineups.
+to finish with a legal roster, lineups set up front rather than with hindsight.
 
-| Strategy | Win rate |
+Two results survive every robustness check:
+
+**Track inflation (+5.0).** The largest durable edge. Bidders who re-priced the board as
+money left the room beat bidders who stuck to preseason values. When early lots go cheap
+the leftover cash has to land on somebody. This is why the app asks you to log the players
+you *lose* — those sales tell you more than your own do.
+
+**Do not play stars and scrubs (−11.2).** The worst strategy tested by a wide margin. This
+lineup starts nine and flexes a tenth; three stars and six holes loses more in the holes
+than it gains at the top. Winning teams spent about $171 of $200 and finished around
+3 QB, 4 RB, 6 WR, 2 TE.
+
+**And one result that did not survive.** An earlier version of this tool told you to pay
+25% over list for quarterbacks, on the strength of a +4.5 point win rate in that
+tournament. It was wrong. That arm was competing against eleven *other* gimmick strategies;
+re-run against ordinary value bidders it loses at every density tested:
+
+| How many of 12 pay up for QBs | Their edge |
 |---|---|
-| Pay 25% over list for quarterbacks | **55.4%** |
-| Pay 25% over list for receivers | 53.5% |
-| Bid only 85% of list | 52.4% |
-| Re-price as the money moves | 50.8% |
-| Discount quarterbacks | 49.1% |
-| Pay 115% of list across the board | 48.1% |
-| Ignore inflation, use preseason values | 45.0% |
-| Stars and scrubs | **39.1%** |
+| 2 | −1.0 pp |
+| 4 | −1.2 pp |
+| 6 | −1.8 pp |
+| 8 | −2.3 pp |
+| 10 | −2.3 pp |
 
-Three things came out of it, each ±0.4 points:
+Testing every other tilt the same way produced the same lesson. Paying up for boom-bust
+players at equal projected points gained **+5.4** points when only two teams did it and
+lost **−8.7** when ten did. Preferring safe, high-floor players showed the same shape
+reversed. These are not strategies; they are trades against the room, and their sign flips
+with the room.
 
-**Pay up for quarterbacks (+4.5).** In a two-QB league, 24 starters come out of a pool of
-roughly 32. Paying a quarter over list beat neutral bidding; discounting them lost 6.3
-points relative to that. The mirror moving the other way is what makes it credible — and
-the same premium on running backs was worth +0.6, near enough to nothing, so this is the
-format talking rather than an artifact of multiplying a number. Your bid ceilings in the
-Auction Room already include it.
-
-**Track inflation (+5.8).** The largest single edge. Bidders who re-priced the board as
-money left the room beat bidders who stuck to preseason values by 5.8 points. When early
-lots go cheap the leftover cash has to land on somebody. This is why the app asks you to
-log the players you *lose* — those sales tell you more than your own do.
-
-**Do not play stars and scrubs (−11.8).** It was the worst strategy tested by a wide
-margin. This lineup starts nine and flexes a tenth; three stars and six holes loses more in
-the holes than it gains at the top. Winning teams spent about $171 of $200 and finished
-around 3 QB, 4 RB, 6 WR, 2 TE.
+So the tool ships **no fixed positional lean.** What replaces it is a live read: the
+Auction Room tracks what your actual room has paid for each position against list, and
+points you at whatever it is neglecting. That is the only version of "buy low" that cannot
+be arbitraged away by the other eleven managers, because it is defined by them.
 
 ## Reproducing it
 
@@ -147,3 +176,7 @@ average for their draft-capital bucket and nothing else — no scouting.
 
 Treat it as a price sheet built from what actually happened, not a substitute for knowing
 your league. When you know something the box score does not, override it.
+
+And nothing here guarantees a win. The measured edges are worth roughly half a win to a
+win a season against managers bidding off a generic sheet, which is a real advantage and
+not a certainty. Anyone selling you more than that is selling you a story.

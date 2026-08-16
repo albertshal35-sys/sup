@@ -352,6 +352,27 @@ function leagueState() {
            inflation: Math.max(0.3, Math.min(3, inflation)) };
 }
 
+/* What this room is doing to each position, versus the board.
+
+   A fixed rule cannot know your league. A premium that pays when two managers
+   use it stops paying when six do, so the only durable version of "buy low" is
+   measured live: track what each position has actually sold for against list,
+   and lean toward whatever is going cheap. */
+function posMarket(pos, L) {
+  L = L || leagueState();
+  let paid = 0, list = 0, n = 0;
+  S.sales.forEach(s => {
+    const p = byId.get(s.id);
+    if (!p || p.pos !== pos) return;
+    paid += s.price; list += Math.max(1, p.auc); n++;
+  });
+  if (n < 3 || list <= 0) return { n, ratio: null, lean: 1 };
+  const ratio = paid / list;              // >1 means the room is paying up here
+  // lean the other way, gently, and never by more than 15%
+  const lean = Math.max(0.85, Math.min(1.15, 1 + (1 - ratio) * 0.5));
+  return { n, ratio, lean };
+}
+
 /* Market price after inflation — what this player should go for right now. */
 function adjPrice(p, L) {
   return Math.max(1, Math.round(1 + Math.max(0, p.auc - 1) * (L || leagueState()).inflation));
@@ -390,11 +411,11 @@ function myMax(p, B, L) {
 
   let bid = 1 + Math.max(0, p.auc - 1) * Math.max(L.inflation, personal);
 
-  // Validated on 12 replayed auctions: paying above list for quarterbacks in a
-  // two-QB league beat neutral bidding, and discounting them lost. The same
-  // premium on running backs did nothing, so this is about the format, not the
-  // arithmetic.
-  bid *= (RESEARCH.auction.qb_mult !== 1 && p.pos === "QB") ? RESEARCH.auction.qb_mult : 1;
+  // No fixed positional premium. Every one tested — quarterback, receiver,
+  // volatility — either lost outright against ordinary value bidders or only
+  // paid while few others were doing it. What replaces it is the live read on
+  // what THIS room is actually underpaying for.
+  bid *= posMarket(p.pos, L).lean;
 
   // a slot you still have to fill is worth more than a bench upgrade
   const fills = need[p.pos] > 0 || (need.FLEX > 0 && FLEX_POS.includes(p.pos));
@@ -491,6 +512,9 @@ const COLS = [
   { k: "pts", t: "Proj Pts", cls: "num", w: p => p.pts },
   { k: "vorp", t: "VORP", cls: "num", w: p => p.vorp },
   { k: "tier", t: "Tier", cls: "num", w: p => p.tier },
+  { k: "flr", t: "Floor 25", cls: "num", w: p => p.flr },
+  { k: "spk", t: "Spike 25", cls: "num", w: p => p.spk },
+  { k: "ghst", t: "Blank 25", cls: "num", w: p => p.ghst },
   { k: "auc", t: "Value $", cls: "num", w: p => p.auc }
 ];
 
@@ -530,6 +554,21 @@ function renderBoard() {
       </div>
       <div class="findings">${renderFindings()}</div>
       ${renderVorpChart()}
+      <details class="method">
+        <summary>The three columns you will not find on other boards</summary>
+        <div class="pad" style="padding-left:0">
+          <p><strong>Floor 25</strong> — the share of last season's seventeen weeks he outscored a typical starter
+          at his position. How often he actually won you the slot, rather than how much he scored in total.</p>
+          <p><strong>Spike 25</strong> — the share of weeks in the top decile of outcomes at his position. These
+          are the weeks that beat a good opponent rather than a bad one.</p>
+          <p><strong>Blank 25</strong> — the share of weeks he gave you nothing at all, injury and bye included.
+          Per-game averages hide this; your lineup does not.</p>
+          <p>All three are last season's actuals, not projections, and they describe rather than price. A player
+          is priced on projected points, because that is what testing supported — see the note on Wins Above
+          Available above. Use these to break ties between players the board has close together, and to know what
+          you are buying: the same $30 can buy a metronome or a lottery ticket.</p>
+        </div>
+      </details>
       <details class="method">
         <summary>How the projections are built</summary>
         <div class="pad" style="padding-left:0">
@@ -589,6 +628,9 @@ function renderBoard() {
                 <td class="num">${fmt(p.pts)}</td>
                 <td class="num">${fmt(p.vorp)}</td>
                 <td class="num">${p.tier}</td>
+                <td class="num">${p.flr == null ? "—" : fmt(p.flr * 100) + "%"}</td>
+                <td class="num">${p.spk == null ? "—" : fmt(p.spk * 100) + "%"}</td>
+                <td class="num" style="${p.ghst != null && p.ghst > 0.2 ? "color:var(--danger)" : ""}">${p.ghst == null ? "—" : fmt(p.ghst * 100) + "%"}</td>
                 <td class="num" style="font-weight:700">${p.auc > 0 ? "$" + p.auc : "—"}
                   <span class="vbar" style="width:${Math.max(0, p.auc / maxV * 44)}px"></span></td>
                 <td class="l">${(p.flags || []).map(f => `<span class="flag ${flagClass(f)}">${f}</span>`).join("")}</td>
@@ -673,33 +715,50 @@ function renderFindings() {
   </div>
 
   <div class="finding">
-    <p class="eyebrow">Pay up for quarterbacks</p>
-    <div class="bignum good">+${fmt(R.auction.qb_edge, 1)} pp</div>
-    <p>Twelve bidding strategies ran against each other through replayed auctions with real weekly scores.
-    Paying ${fmt((R.auction.qb_mult - 1) * 100)}% above list for quarterbacks beat neutral bidding by
-    ${fmt(R.auction.qb_edge, 1)} points of win rate. Discounting them lost ${fmt(Math.abs(R.auction.qb_mirror), 1)}
-    points relative to that — the mirror moved the other way, which is what tells you it is real. The same premium
-    on running backs was worth ${fmt(R.auction.rb_edge, 1)}, near enough to nothing, so this is the two-quarterback
-    rule talking, not a quirk of the arithmetic. Your bid ceilings already include it.</p>
+    <p class="eyebrow">There is no magic premium</p>
+    <div class="bignum bad">${fmt(R.field.qb_density[0].edge, 1)} to ${fmt(R.field.qb_density[R.field.qb_density.length - 1].edge, 1)}</div>
+    <p>An earlier version of this page told you to pay 25% over list for quarterbacks. That was wrong, and the
+    way it was wrong is the most useful thing here. It won its first tournament because it was competing against
+    eleven <em>other</em> gimmick strategies. Re-run against ordinary value bidders and it loses at every density
+    — whether two managers do it or ten. Every fixed positional premium tested behaved the same way: they are
+    trades against the room, not properties of the game. The board ships neutral.</p>
     <dl class="kv">
-      ${R.auction.table.slice(0, 6).map(r => `<dt>${r.name}</dt><dd class="num">${fmt(r.win, 1)}%</dd>`).join("")}
+      ${R.field.qb_density.map(d => `<dt>${d.n} of 12 pay up for QBs</dt><dd class="num">${fmt(d.edge, 1)} pp</dd>`).join("")}
     </dl>
-    <p class="hint" style="margin-top:.4rem">±${fmt(R.auction.se, 2)} pp.</p>
   </div>
 
   <div class="finding">
-    <p class="eyebrow">Watch the room, not the board</p>
-    <div class="bignum good">+${fmt(R.auction.inflation_edge, 1)} pp</div>
-    <p>Bidders who re-priced the board as the money moved beat bidders who stuck to their preseason numbers by
-    ${fmt(R.auction.inflation_edge, 1)} points of win rate — the largest single edge in the whole auction study.
-    When the early lots go cheap, the leftover cash has to land on somebody, and everyone still available is
-    worth more than the sheet says. The Auction Room recomputes that number after every sale you log, which is
-    why logging the players you <em>lose</em> matters more than logging the ones you win.</p>
+    <p class="eyebrow">Edges decay as the room copies you</p>
+    <div class="bignum">${R.field.vol_rare >= 0 ? "+" : ""}${fmt(R.field.vol_rare, 1)} → ${fmt(R.field.vol_common, 1)}</div>
+    <p>Paying up for boom-bust players at equal projected points gained
+    ${fmt(R.field.vol_rare, 1)} points of win rate when only two teams did it, and lost
+    ${fmt(Math.abs(R.field.vol_common), 1)} when ten did. Preferring safe, high-floor players showed the same
+    shape in reverse. Neither is a strategy; both are crowding trades. This is why the Auction Room does not
+    carry a fixed lean and instead reads what your actual room is paying, position by position, and points you
+    at whatever it is neglecting.</p>
     <dl class="kv">
-      <dt>Re-prices as money moves</dt><dd class="num">${fmt(R.auction.neutral, 1)}%</dd>
-      <dt>Sticks to preseason values</dt><dd class="num">${fmt(R.auction.flat, 1)}%</dd>
-      <dt>Overpays across the board</dt><dd class="num">${fmt(R.auction.aggressive, 1)}%</dd>
-      <dt>Hunts bargains at 85%</dt><dd class="num">${fmt(R.auction.bargain, 1)}%</dd>
+      <dt>Chase volatility, 2 of 12 doing it</dt><dd class="num">${R.field.vol_rare >= 0 ? "+" : ""}${fmt(R.field.vol_rare, 1)} pp</dd>
+      <dt>…half the room doing it</dt><dd class="num">${R.field.vol_half >= 0 ? "+" : ""}${fmt(R.field.vol_half, 1)} pp</dd>
+      <dt>…10 of 12 doing it</dt><dd class="num">${fmt(R.field.vol_common, 1)} pp</dd>
+      <dt>Chase safe floors, 2 of 12</dt><dd class="num">${R.field.safe_rare >= 0 ? "+" : ""}${fmt(R.field.safe_rare, 1)} pp</dd>
+      <dt>…10 of 12</dt><dd class="num">${fmt(R.field.safe_common, 1)} pp</dd>
+    </dl>
+  </div>
+
+  <div class="finding">
+    <p class="eyebrow">A custom stat that failed honestly</p>
+    <div class="bignum bad">${fmt(R.waa.diff, 1)} pp</div>
+    <p><strong>Wins Above Available</strong> converts a player's every week into the probability it wins you that
+    week, then sums the season. It forecasts realised wins better than projected points do
+    (${fmt(R.waa.acc_waa, 3)} versus ${fmt(R.waa.acc_pts, 3)}, in all ten test seasons). Pricing an auction off it
+    still lost ${fmt(Math.abs(R.waa.diff), 1)} points of win rate. The reason is worth keeping: your weekly score
+    is a <em>sum</em>, and sums are linear, so a player's value to the team is simply his points. The win curve
+    applies once, when your total meets an opponent's — applying it again to each player double-counts it. The
+    stat still earns its place on the board as a read on floor and durability. It just must not set the price.</p>
+    <dl class="kv">
+      <dt>Forecasts wins better</dt><dd class="num">${fmt(R.waa.acc_waa, 3)} vs ${fmt(R.waa.acc_pts, 3)}</dd>
+      <dt>Wins-priced team</dt><dd class="num">${fmt(R.waa.win_waa, 1)}%</dd>
+      <dt>Points-priced team</dt><dd class="num">${fmt(R.waa.win_pts, 1)}%</dd>
     </dl>
   </div>
 
@@ -812,6 +871,25 @@ function renderDraft() {
              : `Prices are tracking the board almost exactly.`}
              ${pc ? ` So far the room has paid ${fmt(pc * 100)}¢ on the dollar.` : ""}`}
       </p>
+      ${(() => {
+        const mk = ["QB", "RB", "WR", "TE"].map(pp => [pp, posMarket(pp, L)]).filter(x => x[1].ratio !== null);
+        if (!mk.length) return "";
+        mk.sort((a, b) => a[1].ratio - b[1].ratio);
+        const cheap = mk[0], rich = mk[mk.length - 1];
+        return `<div style="margin-top:.7rem">
+          <p class="eyebrow" style="margin-bottom:.35rem">What this room is paying, by position</p>
+          <div class="chips">${mk.map(([pp, m]) => `<span class="chip" style="cursor:default">
+            <span style="color:var(--${pp.toLowerCase()})">${pp}</span>
+            ${fmt(m.ratio * 100)}¢ <span class="psub">on the dollar · ${m.n} sold</span></span>`).join("")}</div>
+          ${cheap[1].ratio < 0.92 ? `<p class="hint" style="margin:.4rem 0 0">
+            <span class="flag good">Buy</span> ${cheap[0]} is going for ${fmt(cheap[1].ratio * 100)}¢ on the dollar in this room —
+            that is where your money stretches furthest.${rich[1].ratio > 1.08
+              ? ` ${rich[0]} at ${fmt(rich[1].ratio * 100)}¢ is the one to sit out.` : ""}</p>`
+          : rich[1].ratio > 1.08 ? `<p class="hint" style="margin:.4rem 0 0">
+            <span class="flag warn">Sit out</span> ${rich[0]} is going for ${fmt(rich[1].ratio * 100)}¢ on the dollar —
+            let someone else pay it.</p>` : ""}
+        </div>`;
+      })()}
     </div>
 
     <div class="room">

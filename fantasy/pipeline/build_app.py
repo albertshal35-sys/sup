@@ -11,7 +11,10 @@ TILT_WR = json.load(open("out/research_tilt_WR.json"))
 TILT_RB = json.load(open("out/research_tilt_RB.json"))
 CONF = json.load(open("out/research_confirm_WR.json"))
 WTS = json.load(open("out/research_weights.json"))
-AUC = json.load(open("out/research_auction.json"))
+AUC = json.load(open("out/research_auction_real.json"))
+WAAJ = json.load(open("out/research_waa.json"))
+FIELD = json.load(open("out/research_field.json"))
+QBD = json.load(open("out/research_qb_density.json"))
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -99,6 +102,8 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
+        waa=clean(r.get("waa25"), 2), flr=clean(r.get("flr25"), 3),
+        spk=clean(r.get("spk25"), 3), ghst=clean(r.get("ghst25"), 3),
         flags=list(r.flags) if isinstance(r.flags, (list, np.ndarray)) else []))
 players.sort(key=lambda p: (-p["auc"], -p["vorp"]))
 for i, p in enumerate(players):
@@ -186,6 +191,15 @@ _tot = sum(p["auc"] for p in players)
 for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
     split[pos] = round(sum(p["auc"] for p in players if p["pos"] == pos) / _tot * 100, 1)
 RESEARCH["budget_split"] = split
+RESEARCH["waa"] = dict(
+    acc_waa=WAAJ["acc_waa"], acc_pts=WAAJ["acc_pts"],
+    win_waa=WAAJ["wins"], win_pts=WAAJ["points"], diff=WAAJ["diff"], se=WAAJ["se"])
+RESEARCH["field"] = dict(
+    vol_rare=FIELD["volatile|2"]["edge"], vol_half=FIELD["volatile|6"]["edge"],
+    vol_common=FIELD["volatile|10"]["edge"],
+    safe_rare=FIELD["safe|2"]["edge"], safe_common=FIELD["safe|10"]["edge"],
+    qb_density=[dict(n=int(k), edge=v["edge"], se=v["se"]) for k, v in sorted(QBD.items(), key=lambda x: int(x[0]))])
+print("corrected: QB premium by density ->", RESEARCH["field"]["qb_density"])
 
 # ---------------------------------------------------------------- auction study
 A = {r["strategy"]: r for r in AUC}
@@ -203,7 +217,7 @@ RESEARCH["auction"] = dict(
     neutral=neutral, qb_premium=qb_prem, qb_discount=qb_disc, rb_premium=rb_prem,
     qb_edge=round(qb_prem - neutral, 2), qb_mirror=round(qb_prem - qb_disc, 2),
     rb_edge=round(rb_prem - neutral, 2), qb_real=bool(qb_real),
-    qb_mult=1.25 if qb_real else 1.0,
+    qb_mult=1.0,
     flat=w("Value, flat"), inflation_edge=round(neutral - w("Value, flat"), 2),
     stars=w("Stars and scrubs"), stars_cost=round(neutral - w("Stars and scrubs"), 2),
     aggressive=w("Aggressive (pay 115%)"), bargain=w("Bargain hunter (pay 85%)"),
