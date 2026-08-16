@@ -207,12 +207,33 @@ print("starting slots consumed league-wide:", taken)
 board["vorp"] = (board.proj_total - board.position.map(rep)).round(1)
 board["pos_rank"] = board.groupby("position").proj_total.rank(ascending=False, method="first").astype(int)
 
-# auction dollars: $200 budget, 12 teams, 17 roster spots
-budget = 200 * TEAMS - (ROSTER * TEAMS)          # $1 minimum per roster spot
-drafted = board.nlargest(ROSTER * TEAMS, "vorp")
-pos_v = drafted[drafted.vorp > 0].vorp.sum()
-board["auction"] = (1 + board.vorp.clip(lower=0) / pos_v * budget).round(0)
+# Auction dollars. A player is worth what he scores above the last man who gets
+# bought at his position — not above the last starter — because everyone below
+# that line costs a dollar. Scale those surpluses so the league's whole
+# discretionary budget (total money minus the $1 each roster spot must reserve)
+# is exactly accounted for.
+AUCTION_BUDGET = 200
+# The drafted pool has to respect roster construction. Ranking the whole board by
+# VORP puts all 32 kickers and all 32 defenses in the top 204 — every team only
+# rosters one of each, so pool them separately and let skill players take the rest.
+skill_spots = ROSTER * TEAMS - 2 * TEAMS
+drafted = pd.concat([
+    board[board.position.isin(["QB", "RB", "WR", "TE"])].nlargest(skill_spots, "vorp"),
+    board[board.position == "K"].nlargest(TEAMS, "vorp"),
+    board[board.position == "DST"].nlargest(TEAMS, "vorp"),
+])
+cut = {}
+for p in ["QB", "RB", "WR", "TE", "K", "DST"]:
+    d = drafted[drafted.position == p]
+    cut[p] = float(d.proj_total.min()) if len(d) else float(board[board.position == p].proj_total.min())
+board["surplus"] = np.maximum(0.0, board.proj_total - board.position.map(cut))
+pool_surplus = board.loc[board.player_id.isin(drafted.player_id), "surplus"].sum()
+discretionary = AUCTION_BUDGET * TEAMS - ROSTER * TEAMS
+board["auction"] = (1 + board.surplus / pool_surplus * discretionary).round(0)
 board.loc[~board.player_id.isin(drafted.player_id), "auction"] = 0
+print(f"auction pricing: ${AUCTION_BUDGET}/team, {ROSTER} spots, "
+      f"${discretionary} discretionary; board totals ${board.auction.sum():.0f} "
+      f"vs ${AUCTION_BUDGET * TEAMS} in the room")
 
 # tiers: break where the drop to the next player is unusually large
 def tier_up(d):

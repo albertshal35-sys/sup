@@ -253,11 +253,11 @@ details.method .pad { font-size: .84rem; color: var(--ink-2); }
   <div class="topbar">
     <div class="brand">
       <span class="name">Gridiron Moneyball</span>
-      <span class="sub">2QB PPR &middot; 12 teams</span>
+      <span class="sub">2QB PPR auction</span>
     </div>
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-board" aria-selected="true" aria-controls="panel-board">Rankings</button>
-      <button role="tab" id="tab-draft" aria-selected="false" aria-controls="panel-draft">Draft Room</button>
+      <button role="tab" id="tab-draft" aria-selected="false" aria-controls="panel-draft">Auction Room</button>
     </div>
     <button class="ghost" id="themeBtn" title="Toggle light / dark">Theme</button>
   </div>
@@ -280,9 +280,6 @@ const FLEX_POS = ["RB", "WR", "TE"];
 const BENCH = 6;
 const ROSTER_SIZE = 17;
 const CAPS = { QB: 4, RB: 6, WR: 7, TE: 3, K: 1, DST: 1 };
-/* Swept over 2014-2025 and checked in both halves of the sample. */
-const NEED_BONUS = RESEARCH.weights.need;
-const VONA_W = RESEARCH.weights.vona;
 
 const $ = (s, r) => (r || document).querySelector(s);
 const fmt = (n, d) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(d == null ? 0 : d);
@@ -293,156 +290,191 @@ const fmt = (n, d) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(d == n
 const S = {
   tab: "board",
   teams: 12,
-  slot: 1,
-  picks: [],            // {id, by} where by = team number, 0-indexed team = slot-1 is me
+  budget: 200,
+  sales: [],            // {id, price, mine}
   boardFilter: "ALL",
   boardQuery: "",
-  sortKey: "dval",
-  sortDir: -1,
-  hideDrafted: true
+  sortKey: "auc",
+  sortDir: -1
 };
-const KEY = "gridiron-moneyball-v1";
+const KEY = "gridiron-moneyball-auction-v1";
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify({ teams: S.teams, slot: S.slot, picks: S.picks })); } catch (e) {}
+  try {
+    localStorage.setItem(KEY, JSON.stringify(
+      { teams: S.teams, budget: S.budget, sales: S.sales }));
+  } catch (e) {}
 }
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY) || "null");
-    if (r) { S.teams = r.teams || 12; S.slot = r.slot || 1; S.picks = r.picks || []; }
+    if (r) { S.teams = r.teams || 12; S.budget = r.budget || 200; S.sales = r.sales || []; }
   } catch (e) {}
 }
 
 const byId = new Map(DATA.players.map(p => [p.id, p]));
-const takenIds = () => new Set(S.picks.map(p => p.id));
+const soldIds = () => new Set(S.sales.map(s => s.id));
+const available = () => { const t = soldIds(); return DATA.players.filter(p => !t.has(p.id)); };
 
 /* ==================================================================
-   DRAFT MATH
+   AUCTION MATH
+
+   Every dollar in the room is chasing the value still on the board. When the
+   early lots go cheap, the leftover money has to land somewhere, so the price
+   of everyone still available rises. That ratio is the inflation factor, and
+   it is the single most useful number in a live auction.
    ================================================================== */
-function teamOnClock(pickNo, teams) {          // 1-indexed pick -> 1-indexed team
-  const rd = Math.ceil(pickNo / teams);
-  const i = ((pickNo - 1) % teams) + 1;
-  return rd % 2 === 1 ? i : teams - i + 1;
-}
-function myPickNumbers(teams, slot, rounds) {
-  const out = [];
-  for (let p = 1; p <= teams * rounds; p++) if (teamOnClock(p, teams) === slot) out.push(p);
-  return out;
-}
-function currentPick() { return S.picks.length + 1; }
-function nextMyPick(from) {
-  const total = S.teams * ROSTER_SIZE;
-  for (let p = from; p <= total; p++) if (teamOnClock(p, S.teams) === S.slot) return p;
-  return null;
+function myRoster() { return S.sales.filter(s => s.mine).map(s => byId.get(s.id)).filter(Boolean); }
+function mySpent() { return S.sales.filter(s => s.mine).reduce((a, s) => a + s.price, 0); }
+
+function budgetState() {
+  const roster = myRoster();
+  const spent = mySpent();
+  const left = S.budget - spent;
+  const spots = ROSTER_SIZE - roster.length;
+  return {
+    roster, spent, left, spots,
+    maxBid: Math.max(0, left - Math.max(0, spots - 1)),
+    perSpot: spots > 0 ? left / spots : 0
+  };
 }
 
-function myRoster() { return S.picks.filter(p => p.by === S.slot).map(p => byId.get(p.id)).filter(Boolean); }
+function leagueState() {
+  const totalMoney = S.teams * S.budget;
+  const spentAll = S.sales.reduce((a, s) => a + s.price, 0);
+  const moneyLeft = totalMoney - spentAll;
+  const spotsLeft = S.teams * ROSTER_SIZE - S.sales.length;
+  const discretionary = Math.max(0, moneyLeft - spotsLeft);   // $1 reserved per spot
+  // value still on the board, counted over as many players as there are seats
+  const av = available().slice().sort((a, b) => b.auc - a.auc).slice(0, Math.max(0, spotsLeft));
+  const valueLeft = av.reduce((a, p) => a + Math.max(0, p.auc - 1), 0);
+  const inflation = valueLeft > 0 ? discretionary / valueLeft : 1;
+  return { totalMoney, spentAll, moneyLeft, spotsLeft, discretionary, valueLeft,
+           inflation: Math.max(0.3, Math.min(3, inflation)) };
+}
 
-function rosterCounts(players) {
+/* Market price after inflation — what this player should go for right now. */
+function adjPrice(p, L) {
+  return Math.max(1, Math.round(1 + Math.max(0, p.auc - 1) * (L || leagueState()).inflation));
+}
+
+/* Roster slots still open, flex included. */
+function openSlots(players) {
   const c = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DST: 0 };
   players.forEach(p => { if (c[p.pos] != null) c[p.pos]++; });
-  return c;
-}
-
-/* Which starting slots are still open, accounting for the flex. */
-function openSlots(players) {
-  const c = rosterCounts(players);
   const need = {};
   ["QB", "RB", "WR", "TE", "K", "DST"].forEach(p => need[p] = Math.max(0, LINEUP[p] - c[p]));
   let surplus = 0;
   FLEX_POS.forEach(p => surplus += Math.max(0, c[p] - LINEUP[p]));
   need.FLEX = Math.max(0, LINEUP.FLEX - surplus);
+  need._counts = c;
   return need;
 }
 
-function available() {
-  const t = takenIds();
-  return DATA.players.filter(p => !t.has(p.id));
+/* What YOU should be willing to pay. Two forces: the market price after
+   inflation, and your own budget pressure — money you do not spend is money
+   you never had. */
+function myMax(p, B, L) {
+  B = B || budgetState(); L = L || leagueState();
+  if (B.spots <= 0) return 0;
+  const need = openSlots(B.roster);
+  if ((need._counts[p.pos] || 0) >= (CAPS[p.pos] || 99)) return 0;
+
+  const market = adjPrice(p, L);
+  // my own money-to-value ratio over the seats I still have to fill
+  const myDisc = Math.max(0, B.left - B.spots);
+  const wants = available().filter(q => q.id !== p.id)
+    .sort((a, b) => b.auc - a.auc).slice(0, Math.max(0, B.spots - 1));
+  const wantValue = wants.reduce((a, q) => a + Math.max(0, q.auc - 1), 0)
+                  + Math.max(0, p.auc - 1);
+  const personal = wantValue > 0 ? myDisc / wantValue : 1;
+
+  let bid = 1 + Math.max(0, p.auc - 1) * Math.max(L.inflation, personal);
+
+  // Validated on 12 replayed auctions: paying above list for quarterbacks in a
+  // two-QB league beat neutral bidding, and discounting them lost. The same
+  // premium on running backs did nothing, so this is about the format, not the
+  // arithmetic.
+  bid *= (RESEARCH.auction.qb_mult !== 1 && p.pos === "QB") ? RESEARCH.auction.qb_mult : 1;
+
+  // a slot you still have to fill is worth more than a bench upgrade
+  const fills = need[p.pos] > 0 || (need.FLEX > 0 && FLEX_POS.includes(p.pos));
+  if (fills) bid *= 1.08;
+  else if (p.pos !== "K" && p.pos !== "DST") bid *= 0.92;
+
+  // kicker and defense are coin flips; never pay for them
+  if (p.pos === "K" || p.pos === "DST") bid = Math.min(bid, 2);
+
+  // Never bid money — or a roster spot — you need to finish a legal lineup.
+  // K and D/ST are mandatory slots even though they are worth a dollar each.
+  const mustFill = Object.entries(need).filter(([k]) => k !== "_counts" && k !== "FLEX")
+    .reduce((a, [, v]) => a + v, 0) + need.FLEX;
+  const fillsAny = fills || need[p.pos] > 0;
+  if (!fillsAny && mustFill >= B.spots) return 0;
+  const reserve = Math.max(0, mustFill - (fillsAny ? 1 : 0));
+  return Math.max(0, Math.min(Math.round(bid), B.maxBid, B.left - reserve));
 }
 
-/* Value over next available: what the position costs you if you wait a turn. */
-function vonaGains(avail, picksUntilNext) {
-  const sorted = [...avail].sort((a, b) => b.dval - a.dval);
-  const survivors = new Set(sorted.slice(picksUntilNext).map(p => p.id));
-  const g = {};
-  ["QB", "RB", "WR", "TE", "K", "DST"].forEach(pos => {
-    const now = sorted.find(p => p.pos === pos);
-    const later = sorted.find(p => p.pos === pos && survivors.has(p.id));
-    g[pos] = (now ? now.dval : 0) - (later ? later.dval : (now ? now.dval : 0));
-  });
-  return g;
+function verdict(p, B, L) {
+  const mx = myMax(p, B, L);
+  const mkt = adjPrice(p, L);
+  const need = openSlots(B.roster);
+  if (B.spots <= 0) return { mx, mkt, tone: "warn", text: "Your roster is full." };
+  if ((need._counts[p.pos] || 0) >= (CAPS[p.pos] || 99))
+    return { mx, mkt, tone: "warn", text: "You already have as many " + p.pos + "s as you can use." };
+  if (mx < 1) return { mx, mkt, tone: "warn", text: "You cannot afford him and still fill your roster." };
+  if (mx >= mkt) return { mx, mkt, tone: "good",
+    text: "Bid to $" + mx + ". Market is about $" + mkt + ", and you can afford to win this one." };
+  return { mx, mkt, tone: "", text: "Bid to $" + mx + " and no further — he should go for about $" + mkt + "." };
 }
 
-/* The formula. Returns scored, sorted candidates with a plain-English reason. */
-function recommend(limit) {
-  const avail = available();
-  const roster = myRoster();
-  const counts = rosterCounts(roster);
-  const need = openSlots(roster);
-  const cur = currentPick();
-  const nxt = nextMyPick(cur + 1);
-  const picksUntil = nxt ? nxt - cur - 1 : 0;
-  const gains = vonaGains(avail, picksUntil);
-  const picksLeft = ROSTER_SIZE - roster.length;
-  const mustFill = Object.entries(need).filter(([k, v]) => k !== "FLEX" && v > 0)
-                         .reduce((a, [, v]) => a + v, 0) + need.FLEX;
-
-  const scored = avail.map(p => {
-    let sc = p.dval;               // VORP, carrying the validated positional premium
+/* The board, re-sorted by what is worth chasing given your budget right now. */
+function targets(limit) {
+  const B = budgetState(), L = leagueState();
+  const need = openSlots(B.roster);
+  // once your remaining spots only just cover the slots you must still fill,
+  // kicker and defense stop being ignorable and start being the whole list
+  const mustFill = Object.entries(need).filter(([k]) => k !== "_counts" && k !== "FLEX")
+    .reduce((a, [, v]) => a + v, 0) + need.FLEX;
+  const mustOnly = mustFill >= B.spots;
+  return available().map(p => {
+    const mx = myMax(p, B, L);
+    const mkt = adjPrice(p, L);
+    const fills = need[p.pos] > 0 || (need.FLEX > 0 && FLEX_POS.includes(p.pos));
     const why = [];
-    const fillsStarter = need[p.pos] > 0;
-    const fillsFlex = !fillsStarter && need.FLEX > 0 && FLEX_POS.includes(p.pos);
-    if (fillsStarter) { sc += NEED_BONUS; why.push("fills your " + p.pos + " slot"); }
-    else if (fillsFlex) { sc += NEED_BONUS * 0.6; why.push("fills your flex"); }
-    const g = gains[p.pos] || 0;
-    if (g > 0) { sc += VONA_W * g; }
-    if (g >= 25) why.push("the " + p.pos + " board drops " + fmt(g) + " pts before your next pick");
-
-    // roster caps and end-of-draft realities
-    if (counts[p.pos] >= (CAPS[p.pos] || 99)) sc = -1e6;
-    if ((p.pos === "K" || p.pos === "DST") && picksLeft > 2) sc -= 400;
-    if (mustFill >= picksLeft && !(fillsStarter || fillsFlex)) sc = -1e6;
-
+    if (fills) why.push("fills your " + (need[p.pos] > 0 ? p.pos : "flex") + " slot");
+    if (mx > mkt) why.push("you can outbid the room's likely price of $" + mkt);
     if (p.flags && p.flags.includes("TD regression risk")) why.push("scored above his volume last year — expect a pullback");
     if (p.flags && p.flags.includes("Positive TD regression")) why.push("underscored his volume last year — buy-low");
-    if (p.tier === 1 && p.pos !== "K" && p.pos !== "DST") why.push("top tier at " + p.pos);
-    return { p, sc, why, g };
-  }).filter(x => x.sc > -1e5);
-
-  scored.sort((a, b) => b.sc - a.sc);
-
-  // Tier-cliff note. Only worth saying when the tier was a real group to begin
-  // with — a tier of one is just a gap, not a run about to end.
-  scored.slice(0, limit || 6).forEach(x => {
-    if (x.p.pos === "K" || x.p.pos === "DST") return;
-    const tierSize = DATA.players.filter(q => q.pos === x.p.pos && q.tier === x.p.tier).length;
-    const left = avail.filter(q => q.pos === x.p.pos && q.tier === x.p.tier).length;
-    if (tierSize >= 2 && left === 1) x.why.unshift("last man in " + x.p.pos + " tier " + x.p.tier);
-  });
-  return scored.slice(0, limit || 6);
+    // value per dollar you can actually spend, weighted toward slots you need
+    const score = mx < 1 ? -1 : (p.vorp + (fills ? 25 : 0)) / Math.max(mkt, 1);
+    return { p, mx, mkt, why, score, affordable: mx >= mkt };
+  }).filter(x => x.score > 0 && (mustOnly || (x.p.pos !== "K" && x.p.pos !== "DST")))
+    .sort((a, b) => b.score - a.score)
+    // no more than two of any position, or a 2QB league returns nothing but
+    // quarterbacks and the list stops being a shopping list
+    .filter((x, _i, all) => all.filter(y => y.p.pos === x.p.pos).indexOf(x) < 2)
+    .slice(0, limit || 8);
 }
 
-function positionalRun() {
-  const last = S.picks.slice(-8);
-  if (last.length < 5) return null;
-  const c = {};
-  last.forEach(p => { const q = byId.get(p.id); if (q) c[q.pos] = (c[q.pos] || 0) + 1; });
-  const best = Object.entries(c).sort((a, b) => b[1] - a[1])[0];
-  return best && best[1] >= 4 ? { pos: best[0], n: best[1], of: last.length } : null;
+function priceCheck() {
+  /* How the room has been paying versus the board, so far. */
+  if (!S.sales.length) return null;
+  let paid = 0, list = 0;
+  S.sales.forEach(s => { const p = byId.get(s.id); if (p) { paid += s.price; list += Math.max(1, p.auc); } });
+  return list > 0 ? paid / list : null;
 }
 
 /* ==================================================================
    ACTIONS
    ================================================================== */
-function draftPlayer(id, mine) {
-  // "Mine" is honoured even when the pick counter says another team is up —
-  // real drafts get logged out of order, and the roster matters more than
-  // whether the running count agrees.
-  const by = mine ? S.slot : teamOnClock(currentPick(), S.teams);
-  S.picks.push({ id, by });
+function logSale(id, price, mine) {
+  const p = byId.get(id);
+  if (!p) return;
+  S.sales.push({ id, price: Math.max(1, Math.round(price) || 1), mine: !!mine });
   save(); render();
 }
-function undo() { S.picks.pop(); save(); render(); }
-function resetDraft() { S.picks = []; save(); render(); }
+function undo() { S.sales.pop(); save(); render(); }
+function resetAuction() { S.sales = []; save(); render(); }
 
 /* ==================================================================
    RENDER — BOARD
@@ -458,33 +490,34 @@ const COLS = [
   { k: "g", t: "Gm", cls: "num", w: p => p.g },
   { k: "pts", t: "Proj Pts", cls: "num", w: p => p.pts },
   { k: "vorp", t: "VORP", cls: "num", w: p => p.vorp },
-  { k: "dval", t: "Draft value", cls: "num", w: p => p.dval },
   { k: "tier", t: "Tier", cls: "num", w: p => p.tier },
-  { k: "auc", t: "$", cls: "num", w: p => p.auc }
+  { k: "auc", t: "Value $", cls: "num", w: p => p.auc }
 ];
 
 function renderBoard() {
   const el = $("#panel-board");
-  const t = takenIds();
+  const t = soldIds();
   let rows = DATA.players.filter(p =>
     (S.boardFilter === "ALL" || p.pos === S.boardFilter) &&
     (!S.boardQuery || p.name.toLowerCase().includes(S.boardQuery.toLowerCase()) ||
       (p.team || "").toLowerCase().includes(S.boardQuery.toLowerCase())));
-  const col = COLS.find(c => c.k === S.sortKey) || COLS.find(c => c.k === 'dval');
+  const col = COLS.find(c => c.k === S.sortKey) || COLS.find(c => c.k === 'auc');
   rows.sort((a, b) => {
     const x = col.w(a), y = col.w(b);
     if (typeof x === "string" || typeof y === "string") return String(x).localeCompare(String(y)) * S.sortDir * -1;
     return ((x == null ? -1e9 : x) - (y == null ? -1e9 : y)) * S.sortDir;
   });
-  const maxV = Math.max(...DATA.players.map(p => p.dval));
+  const maxV = Math.max(...DATA.players.map(p => p.auc));
 
   el.innerHTML = `
   <div class="grid" style="padding-top:1.1rem">
     <div>
       <p class="eyebrow">The board</p>
-      <h1>Every pick, priced in wins</h1>
+      <h1>Every player, priced in dollars</h1>
       <p class="hint" style="max-width:70ch;margin-top:.4rem">
-        Ranked by value over replacement for <strong>this</strong> lineup — 2QB, 2RB, 3WR, 1TE, 1 flex, 12 teams, full PPR.
+        Auction values for <strong>this</strong> lineup — 2QB, 2RB, 3WR, 1TE, 1 flex, full PPR, ${S.teams} teams at
+        $${S.budget} each. A player's price is what he scores above the last man bought at his position, scaled so
+        the room's whole budget is accounted for; the dollars on this page sum to the dollars in the league.
         Projections come from gradient-boosted models trained on every player season from 1999 to 2025
         (${DATA.meta.player_seasons.toLocaleString()} of them), scored under your rules.
       </p>
@@ -555,10 +588,9 @@ function renderBoard() {
                 <td class="num">${fmt(p.g, 1)}</td>
                 <td class="num">${fmt(p.pts)}</td>
                 <td class="num">${fmt(p.vorp)}</td>
-                <td class="num" style="font-weight:700">${fmt(p.dval)}
-                  <span class="vbar" style="width:${Math.max(0, p.dval / maxV * 44)}px"></span></td>
                 <td class="num">${p.tier}</td>
-                <td class="num">${p.auc > 0 ? "$" + p.auc : "—"}</td>
+                <td class="num" style="font-weight:700">${p.auc > 0 ? "$" + p.auc : "—"}
+                  <span class="vbar" style="width:${Math.max(0, p.auc / maxV * 44)}px"></span></td>
                 <td class="l">${(p.flags || []).map(f => `<span class="flag ${flagClass(f)}">${f}</span>`).join("")}</td>
               </tr>`).join("")}
           </tbody>
@@ -591,9 +623,9 @@ function renderFindings() {
     <p class="eyebrow">The 2QB rule is the whole game</p>
     <div class="bignum good">+${fmt(R.qb_edge)} pts</div>
     <p>Starting two quarterbacks drags replacement level from QB13 down to QB25. That single rule adds
-    ${fmt(R.qb_edge)} points of value to the QB1 versus a one-quarterback league. In the draft simulations,
-    waiting on quarterbacks was the single worst thing a team could do — ${fmt(R.late_qb_cost * 100, 1)} win
-    percentage points below the best strategy.</p>
+    ${fmt(R.qb_edge)} points of value to the QB1 versus a one-quarterback league, and it is why roughly
+    ${fmt(R.budget_split.QB)}% of your budget belongs at the position. Twenty-four quarterbacks start every
+    week and about thirty-two exist worth starting.</p>
     <dl class="kv">
       <dt>QB replacement, 2QB</dt><dd class="num">${fmt(R.repl.QB)} pts</dd>
       <dt>QB replacement, 1QB</dt><dd class="num">${fmt(R.repl_1qb.QB)} pts</dd>
@@ -635,52 +667,56 @@ function renderFindings() {
     <p class="eyebrow">Kicker and defense are noise</p>
     <div class="bignum">${fmt(R.dst_k.dst_yoy, 2)} / ${fmt(R.dst_k.k_yoy, 2)}</div>
     <p>Year-over-year rank correlation for defenses and kickers. Both are close enough to a coin flip that
-    spending anything but your last two picks on them is a donation. The board prices them accordingly and the
-    draft room will refuse to recommend one until the end.</p>
+    every dollar past the first is a donation. The board prices them at a dollar or two, together about
+    ${fmt(R.budget_split.K + R.budget_split.DST)}% of your budget, and the Auction Room caps your bid on them
+    at $2 no matter how much money you are sitting on.</p>
   </div>
 
   <div class="finding">
-    <p class="eyebrow">Drafting on projections alone loses</p>
-    <div class="bignum good">+${fmt(R.sim.formula_edge, 1)} pp</div>
-    <p>Twelve strategies drafted against each other across replayed seasons, using real weekly scores and optimal
-    weekly lineups. Ranking players by projected points — what most drafters do — finished last but one.
-    Pricing them against replacement level, then adding a bonus for filling an empty starting slot and a discount
-    for positions that will still be stocked next turn, was worth ${fmt(R.sim.formula_edge, 1)} percentage points
-    of win rate over that. On a 14-game schedule that is about ${fmt(R.sim.formula_edge / 100 * 14, 1)} extra wins
-    a season, before you know a single thing about any player.</p>
+    <p class="eyebrow">Pay up for quarterbacks</p>
+    <div class="bignum good">+${fmt(R.auction.qb_edge, 1)} pp</div>
+    <p>Twelve bidding strategies ran against each other through replayed auctions with real weekly scores.
+    Paying ${fmt((R.auction.qb_mult - 1) * 100)}% above list for quarterbacks beat neutral bidding by
+    ${fmt(R.auction.qb_edge, 1)} points of win rate. Discounting them lost ${fmt(Math.abs(R.auction.qb_mirror), 1)}
+    points relative to that — the mirror moved the other way, which is what tells you it is real. The same premium
+    on running backs was worth ${fmt(R.auction.rb_edge, 1)}, near enough to nothing, so this is the two-quarterback
+    rule talking, not a quirk of the arithmetic. Your bid ceilings already include it.</p>
     <dl class="kv">
-      ${R.sim.table.map(r => `<dt>${r.name}</dt><dd class="num">${fmt(r.win, 1)}%</dd>`).join("")}
+      ${R.auction.table.slice(0, 6).map(r => `<dt>${r.name}</dt><dd class="num">${fmt(r.win, 1)}%</dd>`).join("")}
     </dl>
-    <p class="hint" style="margin-top:.4rem">Held out: 2021–2025, never used to tune the weights. ±${fmt(R.sim.se, 2)} pp.</p>
+    <p class="hint" style="margin-top:.4rem">±${fmt(R.auction.se, 2)} pp.</p>
   </div>
 
   <div class="finding">
-    <p class="eyebrow">A finding that did not survive its control</p>
-    <div class="bignum">${R.tilt.wr_delta >= 0 ? "+" : ""}${fmt(R.tilt.wr_delta, 1)} vs ${R.tilt.rb_delta >= 0 ? "+" : ""}${fmt(R.tilt.rb_delta, 1)}</div>
-    <p>Paying a premium for wide receivers beat the neutral formula by ${fmt(R.tilt.wr_delta, 1)} percentage
-    points across ${R.tilt.seasons} seasons — tempting, and it held in both halves of the sample. But the same
-    premium applied to running backs gained ${fmt(R.tilt.rb_delta, 1)}, so it was never about receivers.
-    Scaling any one position's value up quietly shrinks the fixed roster-need bonus, and that was the real
-    effect. The fix was to retune the two weights directly rather than to tilt a position.</p>
+    <p class="eyebrow">Watch the room, not the board</p>
+    <div class="bignum good">+${fmt(R.auction.inflation_edge, 1)} pp</div>
+    <p>Bidders who re-priced the board as the money moved beat bidders who stuck to their preseason numbers by
+    ${fmt(R.auction.inflation_edge, 1)} points of win rate — the largest single edge in the whole auction study.
+    When the early lots go cheap, the leftover cash has to land on somebody, and everyone still available is
+    worth more than the sheet says. The Auction Room recomputes that number after every sale you log, which is
+    why logging the players you <em>lose</em> matters more than logging the ones you win.</p>
     <dl class="kv">
-      <dt>WR premium, best level</dt><dd class="num">${R.tilt.wr_delta >= 0 ? "+" : ""}${fmt(R.tilt.wr_delta, 2)} pp</dd>
-      <dt>RB premium, best level</dt><dd class="num">${R.tilt.rb_delta >= 0 ? "+" : ""}${fmt(R.tilt.rb_delta, 2)} pp</dd>
-      <dt>Need bonus in use</dt><dd class="num">${fmt(R.weights.need)} pts</dd>
-      <dt>Scarcity weight in use</dt><dd class="num">${fmt(R.weights.vona, 2)}</dd>
+      <dt>Re-prices as money moves</dt><dd class="num">${fmt(R.auction.neutral, 1)}%</dd>
+      <dt>Sticks to preseason values</dt><dd class="num">${fmt(R.auction.flat, 1)}%</dd>
+      <dt>Overpays across the board</dt><dd class="num">${fmt(R.auction.aggressive, 1)}%</dd>
+      <dt>Hunts bargains at 85%</dt><dd class="num">${fmt(R.auction.bargain, 1)}%</dd>
     </dl>
   </div>
 
   <div class="finding">
-    <p class="eyebrow">What a winning roster looked like</p>
-    <div class="bignum">${R.shape.shape}</div>
-    <p>Averaged across the best-performing teams in the replayed drafts, over fifteen non-kicker, non-defense
-    picks. The second quarterback came off the board around round ${fmt(R.shape.qb2_round, 1)} — not in the first
-    two rounds, but nowhere near as late as a standard league would tempt you. Those teams made the playoffs
-    ${fmt(R.shape.playoff * 100)}% of the time against a ${fmt(100 / 12 * 6)}% baseline.</p>
+    <p class="eyebrow">Stars and scrubs is a trap here</p>
+    <div class="bignum bad">−${fmt(R.auction.stars_cost, 1)} pp</div>
+    <p>Blowing the budget on five studs and filling the rest with dollar players was the worst strategy tested,
+    ${fmt(R.auction.stars_cost, 1)} points of win rate below disciplined bidding. This lineup starts nine players
+    and flexes a tenth; a roster with three stars and six holes loses more in the holes than it gains at the top.
+    The winning teams spent about $${fmt(R.auction.best_spend)} of $200 and came out
+    ${R.auction.best_shape.split("/").join(", ")}.</p>
     <dl class="kv">
-      <dt>Round the 2nd QB was taken</dt><dd class="num">${fmt(R.shape.qb2_round, 1)}</dd>
-      <dt>Playoff rate</dt><dd class="num">${fmt(R.shape.playoff * 100, 1)}%</dd>
-      <dt>Most points in the league</dt><dd class="num">${fmt(R.shape.top1 * 100, 1)}%</dd>
+      <dt>QB</dt><dd class="num">~${fmt(R.budget_split.QB)}% of your money</dd>
+      <dt>RB</dt><dd class="num">~${fmt(R.budget_split.RB)}%</dd>
+      <dt>WR</dt><dd class="num">~${fmt(R.budget_split.WR)}%</dd>
+      <dt>TE</dt><dd class="num">~${fmt(R.budget_split.TE)}%</dd>
+      <dt>K and D/ST together</dt><dd class="num">~${fmt(R.budget_split.K + R.budget_split.DST)}%</dd>
     </dl>
   </div>
 
@@ -730,219 +766,288 @@ function renderVorpChart() {
 }
 
 /* ==================================================================
-   RENDER — DRAFT ROOM
+   RENDER — AUCTION ROOM
    ================================================================== */
 function renderDraft() {
   const el = $("#panel-draft");
-  const cur = currentPick();
-  const totalPicks = S.teams * ROSTER_SIZE;
-  const onClock = teamOnClock(cur, S.teams);
-  const rd = Math.ceil(cur / S.teams);
-  const mine = onClock === S.slot;
-  const nxt = nextMyPick(cur + (mine ? 1 : 0));
-  const roster = myRoster();
-  const need = openSlots(roster);
-  const recs = recommend(6);
-  const run = positionalRun();
-  const avail = available();
-  const upcoming = nextMyPick(cur);
-  const picksUntil = (mine || upcoming == null) ? 0 : upcoming - cur;
-
-  const gone = (() => {
-    const n = nextMyPick(cur + (mine ? 1 : 0));
-    if (!n) return [];
-    const k = n - cur - (mine ? 1 : 0);
-    return [...avail].sort((a, b) => b.dval - a.dval).slice(0, Math.max(0, k)).slice(0, 10);
-  })();
+  const B = budgetState();
+  const L = leagueState();
+  const need = openSlots(B.roster);
+  const tg = targets(8);
+  const pc = priceCheck();
+  const inflPct = Math.round((L.inflation - 1) * 100);
 
   el.innerHTML = `
   <div class="grid" style="padding-top:1.1rem">
     <div class="card pad">
       <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center">
         <div class="statline" style="flex:1">
-          <div class="stat"><div class="k">Pick</div><div class="v mono">${cur > totalPicks ? "done" : cur}</div></div>
-          <div class="stat"><div class="k">Round</div><div class="v mono">${Math.min(rd, ROSTER_SIZE)}</div></div>
-          <div class="stat"><div class="k">On the clock</div>
-            <div class="v ${mine ? "" : "sm"}" style="${mine ? "color:var(--accent)" : ""}">${mine ? "YOU" : "Team " + onClock}</div></div>
-          <div class="stat"><div class="k">Your next pick</div><div class="v mono sm">${nxt ? "#" + nxt + (mine ? "" : " (" + picksUntil + " away)") : "—"}</div></div>
-          <div class="stat"><div class="k">Roster</div><div class="v mono sm">${roster.length}/${ROSTER_SIZE}</div></div>
+          <div class="stat"><div class="k">Budget left</div>
+            <div class="v mono" style="${B.left <= 0 ? "color:var(--danger)" : ""}">$${fmt(B.left)}</div></div>
+          <div class="stat"><div class="k">Slots left</div><div class="v mono">${B.spots}</div></div>
+          <div class="stat"><div class="k">Most you can bid</div>
+            <div class="v mono" style="color:var(--accent)">$${fmt(B.maxBid)}</div></div>
+          <div class="stat"><div class="k">Left per slot</div><div class="v mono sm">$${fmt(B.perSpot, 1)}</div></div>
+          <div class="stat"><div class="k">Market</div>
+            <div class="v mono sm" style="color:${inflPct > 4 ? "var(--danger)" : inflPct < -4 ? "var(--accent)" : "inherit"}">
+              ${inflPct >= 0 ? "+" : ""}${inflPct}%</div></div>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
           <label class="cfg">Teams
-            <select class="cfg" id="cfgTeams">${[8, 10, 12, 14, 16].map(n => `<option ${n === S.teams ? "selected" : ""}>${n}</option>`).join("")}</select>
-          </label>
-          <label class="cfg">Your slot
-            <select class="cfg" id="cfgSlot">${Array.from({ length: S.teams }, (_, i) => i + 1).map(n => `<option ${n === S.slot ? "selected" : ""}>${n}</option>`).join("")}</select>
-          </label>
-          <button class="ghost" id="undoBtn" ${S.picks.length ? "" : "disabled"}>Undo</button>
+            <select class="cfg" id="cfgTeams">${[8, 10, 12, 14, 16].map(n =>
+              `<option ${n === S.teams ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          <label class="cfg">Budget
+            <select class="cfg" id="cfgBudget">${[100, 200, 300, 400].map(n =>
+              `<option ${n === S.budget ? "selected" : ""}>$${n}</option>`).join("")}</select></label>
+          <button class="ghost" id="undoBtn" ${S.sales.length ? "" : "disabled"}>Undo</button>
           <button class="ghost" id="resetBtn">Reset</button>
         </div>
       </div>
-      ${run ? `<p class="hint" style="margin:.6rem 0 0"><span class="flag gold">Run alert</span>
-        ${run.n} of the last ${run.of} picks were ${run.pos}. That board is thinning faster than the model assumes.</p>` : ""}
+      <p class="hint" style="margin:.6rem 0 0">
+        ${S.sales.length === 0
+          ? `Nothing sold yet. Every price on the board is what a player is worth if the room spends its money rationally — $${fmt(S.teams * S.budget)} chasing the whole pool.`
+          : `$${fmt(L.moneyLeft)} still in the room for ${L.spotsLeft} roster spots.
+             ${inflPct > 4 ? `Players are going <strong>cheap</strong>, so the money left over has to land somewhere — everyone still available is worth about ${inflPct}% more than list.`
+             : inflPct < -4 ? `The room is <strong>overpaying</strong> by roughly ${Math.abs(inflPct)}% — sit back and let them, prices ahead are ${Math.abs(inflPct)}% below list.`
+             : `Prices are tracking the board almost exactly.`}
+             ${pc ? ` So far the room has paid ${fmt(pc * 100)}¢ on the dollar.` : ""}`}
+      </p>
     </div>
 
     <div class="room">
-      <!-- ============ recommendations ============ -->
+      <!-- ============ bid check ============ -->
       <div class="card pad">
-        <div class="section-head">
-          <h2>${mine ? "Take one of these" : "If the pick came back to you"}</h2>
+        <div class="section-head"><h2>Who's up?</h2></div>
+        <p class="hint" style="margin-bottom:.6rem">Type the player being auctioned. You'll get the price the
+          room should pay and the most you should.</p>
+        <div class="search">
+          <input id="bidSearch" type="search" placeholder="Player on the block…" autocomplete="off">
         </div>
-        <p class="hint" style="margin-bottom:.7rem">
-          Value over replacement, plus ${NEED_BONUS} points for filling an empty starting slot, minus whatever the
-          position will still offer at pick ${nxt || "—"}.
-        </p>
-        <div>
-          ${recs.map((r, i) => `
+        <div id="bidResult" style="margin-top:.7rem"></div>
+
+        <div style="margin-top:1.1rem">
+          <p class="eyebrow" style="margin-bottom:.4rem">Best buys for your budget</p>
+          <p class="hint" style="margin-bottom:.5rem">Ranked by value per dollar you can actually spend, with the
+            slots you still need weighted up.</p>
+          ${tg.map((t, i) => `
             <div class="rec ${i === 0 ? "top" : ""}">
-              <div class="n mono">${i + 1}</div>
               <div class="body">
-                <div><span class="pos-pill pos-${r.p.pos}">${r.p.pos}</span>
-                  <strong>${r.p.name}</strong>
-                  <span class="psub">${r.p.team || ""} · ${r.p.pos}${r.p.posRank} · ${fmt(r.p.pts)} pts · VORP ${fmt(r.p.vorp)}${r.p.bye ? " · bye " + r.p.bye : ""}</span></div>
-                <div class="why">${r.why.length ? r.why[0].charAt(0).toUpperCase() + r.why[0].slice(1) + (r.why[1] ? "; " + r.why[1] : "") : "Best value on the board."}</div>
+                <div><span class="pos-pill pos-${t.p.pos}">${t.p.pos}</span>
+                  <strong>${t.p.name}</strong>
+                  <span class="psub">${t.p.team || ""} · ${t.p.pos}${t.p.posRank} · ${fmt(t.p.pts)} pts${t.p.bye ? " · bye " + t.p.bye : ""}</span></div>
+                <div class="why">Worth <strong>$${t.mkt}</strong> today${t.mx > t.mkt ? `, and you can go to $${t.mx}` : `; your ceiling is $${t.mx}`}${t.why.length ? " — " + t.why[0] : ""}.</div>
               </div>
               <div class="act">
-                <button class="mini pick" data-take="${r.p.id}">Mine</button>
-                <button class="mini" data-gone="${r.p.id}">Gone</button>
+                <button class="mini pick" data-won="${t.p.id}" data-price="${t.mkt}">I won</button>
+                <button class="mini" data-sold="${t.p.id}" data-price="${t.mkt}">Sold</button>
               </div>
-            </div>`).join("") || `<p class="hint">Draft complete.</p>`}
+            </div>`).join("") || `<p class="hint">Your roster is full.</p>`}
         </div>
-
-        ${gone.length ? `
-        <div style="margin-top:1rem">
-          <p class="eyebrow" style="margin-bottom:.4rem">Likely gone before pick ${nxt}</p>
-          <p class="hint" style="margin-bottom:.4rem">The ${gone.length} highest-value players left. If you want one, this is the turn.</p>
-          <div class="chips">${gone.map(p => `<span class="chip" style="cursor:default"><span style="color:var(--${p.pos.toLowerCase()})">${p.pos}</span> ${p.name}</span>`).join("")}</div>
-        </div>` : ""}
       </div>
 
-      <!-- ============ pick entry ============ -->
+      <!-- ============ log ============ -->
       <div class="card pad">
-        <div class="section-head"><h2>Log a pick</h2></div>
-        <p class="hint" style="margin-bottom:.6rem">Type a name, then say whether you got him or someone else did.
-          <kbd>Enter</kbd> marks the top match gone; <kbd>Shift</kbd>+<kbd>Enter</kbd> puts him on your roster.</p>
+        <div class="section-head"><h2>Log a sale</h2></div>
+        <p class="hint" style="margin-bottom:.6rem">Every sale you log sharpens the inflation number, so log the
+          ones you lose too — those matter more than the ones you win.</p>
         <div class="search">
-          <input id="draftSearch" type="search" placeholder="Start typing a player…" autocomplete="off">
+          <input id="logSearch" type="search" placeholder="Player…" autocomplete="off" style="flex:2">
+          <input id="logPrice" type="number" min="1" placeholder="$" style="flex:0 0 5.5rem;font:inherit;padding:.45rem .5rem;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink)">
         </div>
-        <div id="searchResults" style="margin-top:.6rem"></div>
+        <div id="logResult" style="margin-top:.6rem"></div>
 
         <div style="margin-top:1rem">
-          <p class="eyebrow" style="margin-bottom:.4rem">Draft log</p>
+          <p class="eyebrow" style="margin-bottom:.4rem">Sold (${S.sales.length})</p>
           <div class="log">
-            ${S.picks.length ? S.picks.slice().reverse().map((pk, i) => {
-              const n = S.picks.length - i;
-              const rd = Math.ceil(n / S.teams);
-              const inRd = ((n - 1) % S.teams) + 1;
-              const p = byId.get(pk.id);
-              return `<div><span class="pk mono" title="round ${rd}, pick ${inRd}">${rd}.${String(inRd).padStart(2, "0")}</span>
-                <span style="flex:1">${p ? p.name : pk.id} <span class="psub">${p ? p.pos : ""}</span></span>
-                ${pk.by === S.slot ? '<span class="flag good">you</span>' : ""}</div>`;
-            }).join("") : `<p class="hint">No picks logged yet.</p>`}
+            ${S.sales.length ? S.sales.slice().reverse().map(sale => {
+              const p = byId.get(sale.id);
+              const over = p ? sale.price - Math.max(1, p.auc) : 0;
+              return `<div>
+                <span class="pk mono">$${sale.price}</span>
+                <span style="flex:1">${p ? p.name : sale.id}
+                  <span class="psub">${p ? p.pos : ""}${p && p.auc ? " · list $" + p.auc : ""}</span></span>
+                ${sale.mine ? '<span class="flag good">you</span>'
+                  : over > 2 ? `<span class="flag warn">+$${over}</span>`
+                  : over < -2 ? `<span class="flag good">−$${Math.abs(over)}</span>` : ""}</div>`;
+            }).join("") : `<p class="hint">No sales logged yet.</p>`}
           </div>
         </div>
       </div>
 
-      <!-- ============ my roster ============ -->
+      <!-- ============ my team ============ -->
       <div class="card pad">
         <div class="section-head"><h2>Your team</h2></div>
-        ${renderRoster(roster, need)}
+        ${renderRoster(B, need, L)}
       </div>
     </div>
   </div>`;
 
-  $("#cfgTeams").onchange = e => { S.teams = +e.target.value; if (S.slot > S.teams) S.slot = S.teams; save(); render(); };
-  $("#cfgSlot").onchange = e => { S.slot = +e.target.value; save(); render(); };
+  $("#cfgTeams").onchange = e => { S.teams = +e.target.value; save(); render(); };
+  $("#cfgBudget").onchange = e => { S.budget = +String(e.target.value).replace("$", ""); save(); render(); };
   $("#undoBtn").onclick = undo;
-  $("#resetBtn").onclick = () => { if (confirm("Clear every logged pick and start this draft over?")) resetDraft(); };
-  el.querySelectorAll("[data-take]").forEach(b => b.onclick = () => draftPlayer(b.dataset.take, true));
-  el.querySelectorAll("[data-gone]").forEach(b => b.onclick = () => draftPlayer(b.dataset.gone, false));
-  wireSearch();
+  $("#resetBtn").onclick = () => { if (confirm("Clear every logged sale and start this auction over?")) resetAuction(); };
+  el.querySelectorAll("[data-won]").forEach(b => b.onclick = () => {
+    const v = prompt("What did you pay for " + byId.get(b.dataset.won).name + "?", b.dataset.price);
+    if (v !== null) logSale(b.dataset.won, +v, true);
+  });
+  el.querySelectorAll("[data-sold]").forEach(b => b.onclick = () => {
+    const v = prompt("What did " + byId.get(b.dataset.sold).name + " go for?", b.dataset.price);
+    if (v !== null) logSale(b.dataset.sold, +v, false);
+  });
+  wireBid(); wireLog();
 }
 
-function renderRoster(roster, need) {
+function renderRoster(B, need, L) {
   const used = new Set();
+  const priceOf = id => { const s = S.sales.find(x => x.id === id && x.mine); return s ? s.price : 0; };
   const rows = [];
   const take = pos => {
-    const c = roster.filter(p => p.pos === pos && !used.has(p.id))
-                    .sort((a, b) => b.pts - a.pts)[0];
+    const c = B.roster.filter(p => p.pos === pos && !used.has(p.id)).sort((a, b) => b.pts - a.pts)[0];
     if (c) used.add(c.id);
     return c;
   };
   const push = (lab, p) => rows.push(`<div class="slot ${p ? "" : "empty"}">
       <span class="lab">${lab}</span>
       ${p ? `<span style="flex:1">${p.name} <span class="psub">${p.team || ""}${p.bye ? " · bye " + p.bye : ""}</span></span>
-             <span class="mono psub">${fmt(p.pts)}</span>`
+             <span class="mono psub">$${priceOf(p.id)}</span>`
           : `<span style="flex:1">— open —</span>`}
     </div>`);
   for (let i = 0; i < LINEUP.QB; i++) push("QB", take("QB"));
   for (let i = 0; i < LINEUP.RB; i++) push("RB", take("RB"));
   for (let i = 0; i < LINEUP.WR; i++) push("WR", take("WR"));
   push("TE", take("TE"));
-  const flex = roster.filter(p => FLEX_POS.includes(p.pos) && !used.has(p.id)).sort((a, b) => b.pts - a.pts)[0];
+  const flex = B.roster.filter(p => FLEX_POS.includes(p.pos) && !used.has(p.id)).sort((a, b) => b.pts - a.pts)[0];
   if (flex) used.add(flex.id);
   push("FLEX", flex);
   push("DST", take("DST"));
   push("K", take("K"));
-  const bench = roster.filter(p => !used.has(p.id)).sort((a, b) => b.pts - a.pts);
-  const starters = roster.filter(p => used.has(p.id));
+  const bench = B.roster.filter(p => !used.has(p.id)).sort((a, b) => b.pts - a.pts);
+  const starters = B.roster.filter(p => used.has(p.id));
   const projPts = starters.reduce((a, p) => a + p.pts, 0);
 
-  // bye-week collisions among starters
+  // where the money went, against where the board says it should go
+  const spentBy = {};
+  S.sales.filter(x => x.mine).forEach(x => {
+    const p = byId.get(x.id); if (p) spentBy[p.pos] = (spentBy[p.pos] || 0) + x.price;
+  });
+  const target = RESEARCH.budget_split || {};
+
   const byes = {};
   starters.forEach(p => { if (p.bye) (byes[p.bye] = byes[p.bye] || []).push(p); });
   const clashes = Object.entries(byes).filter(([, v]) => v.length >= 3);
 
+  const pct = B.spent / S.budget * 100;
   return `
     <div class="slots">${rows.join("")}</div>
-    <div style="margin-top:.8rem;display:flex;gap:1.2rem;flex-wrap:wrap">
-      <div class="stat"><div class="k">Projected starter points</div><div class="v mono sm">${fmt(projPts)}</div></div>
-      <div class="stat"><div class="k">Slots open</div><div class="v mono sm">${Object.values(need).reduce((a, b) => a + b, 0)}</div></div>
+    <div style="margin-top:.9rem">
+      <div style="height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden">
+        <div style="height:100%;width:${Math.min(100, pct)}%;background:var(--accent)"></div>
+      </div>
+      <p class="hint" style="margin:.3rem 0 0">$${fmt(B.spent)} of $${fmt(S.budget)} spent · ${B.roster.length}/${ROSTER_SIZE} rostered</p>
     </div>
+    <div style="margin-top:.7rem;display:flex;gap:1.2rem;flex-wrap:wrap">
+      <div class="stat"><div class="k">Projected starter points</div><div class="v mono sm">${fmt(projPts)}</div></div>
+      <div class="stat"><div class="k">Slots open</div>
+        <div class="v mono sm">${Object.entries(need).filter(([k]) => k !== "_counts").reduce((a, [, v]) => a + v, 0)}</div></div>
+    </div>
+    ${Object.keys(spentBy).length ? `
+      <div style="margin-top:.8rem">
+        <p class="eyebrow" style="margin-bottom:.35rem">Where your money went</p>
+        <dl class="kv">${["QB", "RB", "WR", "TE"].filter(p => spentBy[p] || target[p]).map(p =>
+          `<dt>${p}</dt><dd class="num">$${fmt(spentBy[p] || 0)}${target[p] ? ` <span class="psub">of ~$${fmt(target[p] / 100 * S.budget)}</span>` : ""}</dd>`).join("")}</dl>
+      </div>` : ""}
     ${clashes.length ? `<p class="hint" style="margin-top:.6rem"><span class="flag warn">Bye stack</span>
       ${clashes.map(([w, v]) => `${v.length} starters off in week ${w}`).join("; ")}.</p>` : ""}
     ${bench.length ? `<div style="margin-top:.9rem">
       <p class="eyebrow" style="margin-bottom:.35rem">Bench (${bench.length}/${BENCH})</p>
       <div class="slots">${bench.map(p => `<div class="slot">
         <span class="lab">${p.pos}</span><span style="flex:1">${p.name}</span>
-        <span class="mono psub">${fmt(p.pts)}</span></div>`).join("")}</div></div>` : ""}`;
+        <span class="mono psub">$${priceOf(p.id)}</span></div>`).join("")}</div></div>` : ""}`;
 }
 
-function wireSearch() {
-  const inp = $("#draftSearch");
+function matchPlayers(q) {
+  q = (q || "").trim().toLowerCase();
+  if (!q) return [];
+  return available().filter(p => p.name.toLowerCase().includes(q)).slice(0, 6);
+}
+
+function wireBid() {
+  const inp = $("#bidSearch"), box = $("#bidResult");
   if (!inp) return;
-  const box = $("#searchResults");
-  const matches = () => {
-    const q = inp.value.trim().toLowerCase();
-    if (!q) return [];
-    return available().filter(p => p.name.toLowerCase().includes(q)).slice(0, 8);
-  };
   const paint = () => {
-    const m = matches();
-    box.innerHTML = m.length ? m.map(p => `
-      <div class="rec">
+    const m = matchPlayers(inp.value);
+    if (!m.length) { box.innerHTML = inp.value.trim() ? `<p class="hint">Nobody left by that name.</p>` : ""; return; }
+    const B = budgetState(), L = leagueState();
+    box.innerHTML = m.map((p, i) => {
+      const v = verdict(p, B, L);
+      return `<div class="rec ${i === 0 ? "top" : ""}">
         <div class="body">
           <div><span class="pos-pill pos-${p.pos}">${p.pos}</span> <strong>${p.name}</strong>
-            <span class="psub">${p.team || ""} · ${fmt(p.pts)} pts · VORP ${fmt(p.vorp)}</span></div>
+            <span class="psub">${p.team || ""} · ${p.pos}${p.posRank} · ${fmt(p.pts)} pts · list $${p.auc}${p.bye ? " · bye " + p.bye : ""}</span></div>
+          ${i === 0 ? `<div style="display:flex;gap:1.3rem;margin:.45rem 0 .3rem">
+            <div class="stat"><div class="k">Worth today</div><div class="v mono sm">$${v.mkt}</div></div>
+            <div class="stat"><div class="k">Your ceiling</div>
+              <div class="v mono sm" style="color:var(--accent)">$${v.mx}</div></div>
+          </div>
+          <div class="why">${v.text}</div>
+          ${(p.flags || []).length ? `<div style="margin-top:.3rem">${p.flags.map(f =>
+            `<span class="flag ${flagClass(f)}">${f}</span>`).join("")}</div>` : ""}` : ""}
         </div>
         <div class="act">
-          <button class="mini pick" data-take="${p.id}">Mine</button>
-          <button class="mini" data-gone="${p.id}">Gone</button>
+          <button class="mini pick" data-won="${p.id}" data-price="${v.mkt}">I won</button>
+          <button class="mini" data-sold="${p.id}" data-price="${v.mkt}">Sold</button>
+        </div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-won]").forEach(b => b.onclick = () => {
+      const v = prompt("What did you pay for " + byId.get(b.dataset.won).name + "?", b.dataset.price);
+      if (v !== null) logSale(b.dataset.won, +v, true);
+    });
+    box.querySelectorAll("[data-sold]").forEach(b => b.onclick = () => {
+      const v = prompt("What did " + byId.get(b.dataset.sold).name + " go for?", b.dataset.price);
+      if (v !== null) logSale(b.dataset.sold, +v, false);
+    });
+  };
+  inp.oninput = paint;
+  paint();
+}
+
+function wireLog() {
+  const inp = $("#logSearch"), price = $("#logPrice"), box = $("#logResult");
+  if (!inp) return;
+  const paint = () => {
+    const m = matchPlayers(inp.value);
+    box.innerHTML = m.length ? m.map(p => `
+      <div class="rec">
+        <div class="body"><div><span class="pos-pill pos-${p.pos}">${p.pos}</span> <strong>${p.name}</strong>
+          <span class="psub">${p.team || ""} · list $${p.auc}</span></div></div>
+        <div class="act">
+          <button class="mini pick" data-w="${p.id}">I won</button>
+          <button class="mini" data-s="${p.id}">Sold</button>
         </div>
       </div>`).join("") : (inp.value.trim() ? `<p class="hint">Nobody left by that name.</p>` : "");
-    box.querySelectorAll("[data-take]").forEach(b => b.onclick = () => draftPlayer(b.dataset.take, true));
-    box.querySelectorAll("[data-gone]").forEach(b => b.onclick = () => draftPlayer(b.dataset.gone, false));
+    const grab = id => {
+      const v = +price.value;
+      if (!v || v < 1) { price.focus(); return null; }
+      return v;
+    };
+    box.querySelectorAll("[data-w]").forEach(b => b.onclick = () => {
+      const v = grab(); if (v) { logSale(b.dataset.w, v, true); }
+    });
+    box.querySelectorAll("[data-s]").forEach(b => b.onclick = () => {
+      const v = grab(); if (v) { logSale(b.dataset.s, v, false); }
+    });
   };
   inp.oninput = paint;
   inp.onkeydown = e => {
     if (e.key !== "Enter") return;
-    const m = matches();
-    if (!m.length) return;
+    const m = matchPlayers(inp.value);
+    const v = +price.value;
+    if (!m.length || !v || v < 1) return;
     e.preventDefault();
-    draftPlayer(m[0].id, e.shiftKey);
+    logSale(m[0].id, v, e.shiftKey);
   };
   paint();
-  if (document.activeElement !== inp && S.focusSearch) { inp.focus(); }
 }
 
 /* ==================================================================

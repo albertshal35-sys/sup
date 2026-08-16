@@ -11,6 +11,7 @@ TILT_WR = json.load(open("out/research_tilt_WR.json"))
 TILT_RB = json.load(open("out/research_tilt_RB.json"))
 CONF = json.load(open("out/research_confirm_WR.json"))
 WTS = json.load(open("out/research_weights.json"))
+AUC = json.load(open("out/research_auction.json"))
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -98,9 +99,8 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
-        dval=clean(r.vorp * POS_MULT.get(r.position, 1.0), 1),
         flags=list(r.flags) if isinstance(r.flags, (list, np.ndarray)) else []))
-players.sort(key=lambda p: -p["dval"])
+players.sort(key=lambda p: (-p["auc"], -p["vorp"]))
 for i, p in enumerate(players):
     p["rank"] = i + 1
 print("players in app:", len(players),
@@ -180,6 +180,37 @@ RESEARCH = dict(
     sim=dict(best_win=clean(best, 2), formula_edge=clean(formula_edge, 2), se=clean(sim_se, 2),
              table=[dict(name=LABELS.get(r["strategy"], r["strategy"]), win=clean(float(r["win"]), 2))
                     for r in sim_tab[:8]]))
+
+split = {}
+_tot = sum(p["auc"] for p in players)
+for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
+    split[pos] = round(sum(p["auc"] for p in players if p["pos"] == pos) / _tot * 100, 1)
+RESEARCH["budget_split"] = split
+
+# ---------------------------------------------------------------- auction study
+A = {r["strategy"]: r for r in AUC}
+def w(k):
+    return round(float(A[k]["win"]), 2)
+neutral = w("Value + inflation")
+qb_prem, qb_disc = w("QB premium"), w("QB discount")
+rb_prem = w("RB premium")
+# A premium only counts as real if its mirror image moves the other way and the
+# same premium on another position does nothing. QB clears both; RB does not.
+qb_real = (qb_prem - neutral) > 2 and (qb_prem - qb_disc) > 3 and (qb_prem - neutral) > (rb_prem - neutral) + 2
+RESEARCH["auction"] = dict(
+    table=[dict(name=r["strategy"], win=round(float(r["win"]), 2),
+                spend=round(float(r["spend"])), shape=r["shape"]) for r in AUC],
+    neutral=neutral, qb_premium=qb_prem, qb_discount=qb_disc, rb_premium=rb_prem,
+    qb_edge=round(qb_prem - neutral, 2), qb_mirror=round(qb_prem - qb_disc, 2),
+    rb_edge=round(rb_prem - neutral, 2), qb_real=bool(qb_real),
+    qb_mult=1.25 if qb_real else 1.0,
+    flat=w("Value, flat"), inflation_edge=round(neutral - w("Value, flat"), 2),
+    stars=w("Stars and scrubs"), stars_cost=round(neutral - w("Stars and scrubs"), 2),
+    aggressive=w("Aggressive (pay 115%)"), bargain=w("Bargain hunter (pay 85%)"),
+    best_shape=A["QB premium"]["shape"], best_spend=round(float(A["QB premium"]["spend"])),
+    se=round(float(np.mean([float(r["se"]) for r in AUC])), 2))
+print("auction study:", {k: v for k, v in RESEARCH["auction"].items() if k != "table"})
+print("budget split (% of a team's money):", split)
 
 DATA = dict(players=players,
             meta=dict(player_seasons=int(len(sp)), sim_seasons=12,
