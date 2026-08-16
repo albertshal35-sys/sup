@@ -5,7 +5,64 @@ from scipy.stats import spearmanr
 board = pd.read_parquet("out/board2026.parquet")
 sp = pd.read_parquet("out/player_seasons.parquet")
 RA = json.load(open("out/research_a.json"))
+RSIM = json.load(open("out/research_sim.json"))
 RV = json.load(open("out/research_valid.json"))
+TILT_WR = json.load(open("out/research_tilt_WR.json"))
+TILT_RB = json.load(open("out/research_tilt_RB.json"))
+CONF = json.load(open("out/research_confirm_WR.json"))
+WTS = json.load(open("out/research_weights.json"))
+
+# ---------------------------------------------------------------- positional premium
+# Decision rule, fixed before looking at the confirmation run: apply a wide receiver
+# premium only if the clean two-arm test clears 2 standard errors, holds in both
+# halves of the sample, and beats the running-back control. Use the middle of the
+# plateau rather than the argmax, so the weight is not fitted to one lucky level.
+def sweep_delta(tab, pos):
+    base = [r for r in tab if str(r["mult"]).endswith("x1.0")][0]
+    best = max((r for r in tab if not str(r["mult"]).endswith("x1.0")), key=lambda r: float(r["win"]))
+    return float(best["win"]) - float(base["win"]), float(best["se"]), str(best["mult"])
+
+
+wr_sweep_delta, wr_sweep_se, wr_best_lvl = sweep_delta(TILT_WR, "WR")
+rb_sweep_delta, rb_sweep_se, rb_best_lvl = sweep_delta(TILT_RB, "RB")
+
+seasons = sorted(CONF["neutral"].keys())
+neutral_by_season = np.array([CONF["neutral"][s] for s in seasons])
+tilt_key = [k for k in CONF if k != "neutral"][0]
+tilt_by_season = np.array([CONF[tilt_key][s] for s in seasons])
+conf_delta = (tilt_by_season - neutral_by_season).mean() * 100
+early = [i for i, s in enumerate(seasons) if int(s) <= 2020]
+late = [i for i, s in enumerate(seasons) if int(s) > 2020]
+d_early = (tilt_by_season[early] - neutral_by_season[early]).mean() * 100
+d_late = (tilt_by_season[late] - neutral_by_season[late]).mean() * 100
+conf_se = (tilt_by_season - neutral_by_season).std(ddof=1) / np.sqrt(len(seasons)) * 100
+
+TILT_REAL = bool(conf_delta > 2 * conf_se and d_early > 0 and d_late > 0
+                 and conf_delta > rb_sweep_delta)
+POS_MULT = {"WR": 1.25} if TILT_REAL else {}
+
+# Weights actually shipped: the best (need, vona) pair that is also positive in
+# both halves of the sample, so a single strong era cannot pick them.
+top = max(WTS, key=lambda w: float(w["win"]))
+band = [w for w in WTS if float(w["win"]) >= float(top["win"]) - float(top["se"])]
+needs = sorted(float(w["need"]) for w in band)
+plateau_need = needs[len(needs) // 2]                    # middle of the flat region
+plateau_vona = max(set(float(w["vona"]) for w in band),
+                   key=lambda v: sum(1 for w in band if float(w["vona"]) == v))
+pick = min(WTS, key=lambda w: (abs(float(w["need"]) - plateau_need),
+                               abs(float(w["vona"]) - plateau_vona)))
+naive = [w for w in WTS if float(w["need"]) == 0 and float(w["vona"]) == 0][0]
+WEIGHTS = dict(need=float(pick["need"]), vona=float(pick["vona"]),
+               win=round(float(pick["win"]), 2), se=round(float(pick["se"]), 2),
+               vorp_only=round(float(naive["win"]), 2),
+               edge=round(float(pick["win"]) - float(naive["win"]), 2),
+               band=[round(needs[0]), round(needs[-1])])
+print(f"weight plateau: need {needs[0]:.0f}-{needs[-1]:.0f} all within 1 SE; "
+      f"shipping need={WEIGHTS['need']:.0f} vona={WEIGHTS['vona']} "
+      f"({WEIGHTS['win']}% vs {WEIGHTS['vorp_only']}% for VORP alone)")
+print(f"WR sweep best {wr_best_lvl}: {wr_sweep_delta:+.2f} pp | RB control best {rb_best_lvl}: {rb_sweep_delta:+.2f} pp")
+print(f"WR confirmation: {conf_delta:+.2f} pp ± {conf_se:.2f} "
+      f"(2014-20 {d_early:+.2f}, 2021-25 {d_late:+.2f}) -> premium applied: {TILT_REAL}")
 
 
 def clean(v, nd=2):
@@ -41,8 +98,9 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
+        dval=clean(r.vorp * POS_MULT.get(r.position, 1.0), 1),
         flags=list(r.flags) if isinstance(r.flags, (list, np.ndarray)) else []))
-players.sort(key=lambda p: -p["vorp"])
+players.sort(key=lambda p: -p["dval"])
 for i, p in enumerate(players):
     p["rank"] = i + 1
 print("players in app:", len(players),
@@ -85,13 +143,43 @@ best = float(sim_tab[0]["win"])
 late = [r for r in sim_tab if "Late-QB" in r["strategy"]]
 late_cost = (best - float(late[0]["win"])) / 100 if late else 0
 
+raw_win = float([r for r in sim_tab if "Raw projected" in r["strategy"]][0]["win"])
+mb_win = float([r for r in sim_tab if r["strategy"].startswith("MONEYBALL (")][0]["win"])
+formula_edge = mb_win - raw_win
+
+# The held-out table uses internal arm names; give them labels a reader can parse.
+LABELS = {
+    "MONEYBALL (VORP+need+VONA)": "Value + need + scarcity",
+    "MONEYBALL no-VONA": "Value + need only",
+    "MONEYBALL no-need": "Value + scarcity only",
+    "MONEYBALL heavy-need": "Value, heavy need bonus",
+    "MONEYBALL +TE tilt": "Value, tight-end premium",
+    "Starters-first (crude need)": "Fill all starters first",
+    "VORP only": "Value over replacement only",
+    "Raw projected points": "Highest projected points",
+    "WR-heavy": "Value, receiver premium",
+    "RB-heavy": "Value, running-back premium",
+    "QB-hoard": "Value, quarterback premium",
+    "Late-QB": "Wait on quarterbacks",
+}
+sim_se = float(np.mean([float(r["se"]) for r in sim_tab]))
+
 RESEARCH = dict(
-    qb_edge=qb_edge, repl=rep, repl_1qb=rep1,
+    qb_edge=qb_edge, repl=rep, repl_1qb=rep1, pos_mult=POS_MULT, weights=WEIGHTS,
+    tilt=dict(real=TILT_REAL, applied=POS_MULT.get("WR", 1.0),
+              wr_delta=clean(conf_delta, 2), rb_delta=clean(rb_sweep_delta, 2),
+              se=clean(conf_se, 2), seasons=len(seasons),
+              levels=[dict(mult=float(str(r["mult"]).split("x")[1]), win=clean(float(r["win"]), 2))
+                      for r in TILT_WR]),
+    shape=(lambda b: dict(shape=b['shape'], qb2_round=b['qb2_round'],
+                          playoff=b['playoff'], top1=b['top1']))(
+        max(RSIM.values(), key=lambda v: v['winpct'])),
     td_regress=td_regress, sticky=sticky, games=games,
     dst_k=RA["dst_k"], late_qb_cost=clean(late_cost, 4),
     curve={k: [clean(x, 1) for x in v] for k, v in RA["vorp_curve"].items()},
-    sim=dict(best_win=clean(best, 2),
-             table=[dict(name=r["strategy"], win=clean(float(r["win"]), 2)) for r in sim_tab[:7]]))
+    sim=dict(best_win=clean(best, 2), formula_edge=clean(formula_edge, 2), se=clean(sim_se, 2),
+             table=[dict(name=LABELS.get(r["strategy"], r["strategy"]), win=clean(float(r["win"]), 2))
+                    for r in sim_tab[:8]]))
 
 DATA = dict(players=players,
             meta=dict(player_seasons=int(len(sp)), sim_seasons=12,

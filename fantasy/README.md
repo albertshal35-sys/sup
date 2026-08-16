@@ -43,6 +43,9 @@ kicking — re-scored under the league's exact rules.
    seasons using real weekly scores and optimal weekly lineups (`simulate.py`).
 6. **Tune and validate** the winning formula on 2014–2020, then check it on 2021–2025, which
    were never used for tuning (`optimize.py`, `validate.py`).
+7. **Control and retune** — test whether a positional premium is real by running the same
+   premium on a different position, then sweep the formula weights directly
+   (`tilt_test.py`, `tilt_confirm.py`, `weight_sweep.py`).
 
 ### The findings that shaped the board
 
@@ -69,18 +72,35 @@ For every available player:
 
 ```
 score = VORP
-      + 70            if he fills a starting slot you have not filled
-      + 0.5 × (best VORP at his position now
-               − best VORP at his position when your turn comes back)
+      + 54             if he fills a starting slot you have not filled
+      + 0.39 × (best VORP at his position now
+                − best VORP at his position when your turn comes back)
 ```
 
 VORP is projected points minus the last player at that position who would start in a
-12-team league of this shape, flex included. The second term is the part most drafters get
+12-team league of this shape, flex included. The third term is the part most drafters get
 wrong: it is not enough to know a player is good, you need to know whether the position
 will still offer something comparable in two rounds. Quarterback usually will not; wide
 receiver usually will.
 
-The weights were tuned on 2014–2020 and validated on 2021–2025.
+Against drafting by projected points, this was worth **+5.3 percentage points of win rate**
+in the held-out 2021–2025 seasons — roughly 0.7 extra wins on a 14-game schedule. Against
+using VORP alone with no need or scarcity terms, **+2.2 points**. The two extra terms are
+where nearly all the edge lives; their exact weights barely matter, since everything from
+`need = 30` to `need = 90` performed identically. 54 and 0.39 are the middle of that
+plateau, not its argmax.
+
+### One result that did not survive its control
+
+A wide receiver premium on top of the formula beat the neutral version by 1.15 points of
+win rate across all twelve seasons, and it held in both halves of the sample — the kind of
+result that is easy to ship. Running the same premium on running backs as a control gained
+**1.45** points, which killed it: the effect was never about receivers.
+
+Multiplying any one position's value by *m* is algebraically the same as dividing both
+formula weights by *m*, so the sweep was really saying the need bonus was too heavy.
+Retuning the weights directly landed on 54 and 0.39 — precisely 70/1.3 and 0.5/1.3, the
+values the tilt had been backing into. The board ships neutral across positions.
 
 ## Reproducing it
 

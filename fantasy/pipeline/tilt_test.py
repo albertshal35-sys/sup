@@ -7,7 +7,8 @@ across a balanced field over every season 2014-2025.
 """
 import pandas as pd, numpy as np, json, warnings, sys
 warnings.filterwarnings("ignore")
-exec(open("optimize.py").read().split("TUNE = list(range(2014, 2021))")[0])
+import sim_env
+sim_env.load(globals())
 
 ALL = list(range(2014, 2026))
 WHICH = sys.argv[1] if len(sys.argv) > 1 else "WR"

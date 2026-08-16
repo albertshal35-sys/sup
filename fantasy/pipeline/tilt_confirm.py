@@ -6,7 +6,8 @@ per-season split, so a real effect can be told apart from one good era.
 """
 import pandas as pd, numpy as np, json, warnings, sys
 warnings.filterwarnings("ignore")
-exec(open("optimize.py").read().split("TUNE = list(range(2014, 2021))")[0])
+import sim_env
+sim_env.load(globals())
 
 POS = sys.argv[1] if len(sys.argv) > 1 else "WR"
 LV = float(sys.argv[2]) if len(sys.argv) > 2 else 1.3
