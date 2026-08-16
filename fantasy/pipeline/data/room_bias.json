@@ -1,0 +1,26 @@
+{
+ "QB": {
+  "room_pct": 17.9,
+  "fair_pct": 29.0,
+  "gap": -11.1,
+  "ratio": 0.617
+ },
+ "RB": {
+  "room_pct": 36.3,
+  "fair_pct": 24.8,
+  "gap": 11.4,
+  "ratio": 1.461
+ },
+ "WR": {
+  "room_pct": 41.6,
+  "fair_pct": 37.5,
+  "gap": 4.2,
+  "ratio": 1.111
+ },
+ "TE": {
+  "room_pct": 4.2,
+  "fair_pct": 8.7,
+  "gap": -4.5,
+  "ratio": 0.482
+ }
+}

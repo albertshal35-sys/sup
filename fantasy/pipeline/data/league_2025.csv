@@ -1,0 +1,170 @@
+team,slot,player,price
+Morn + Vic,QB,Caleb,10
+Ween + Joe,QB,Herbert,6
+Felix + Solly,QB,Daniels,35
+Bobby + Az,QB,Joe Burrow,31
+Al + Teddy,QB,Lamar,42
+Morn + Vic,QB,Purdy,10
+Ween + Joe,QB,Kyler,13
+Felix + Solly,QB,Love,8
+Bobby + Az,QB,Stroud,6
+Al + Teddy,QB,Fields,12
+Morn + Vic,RB,De'Von Achane,39
+Ween + Joe,RB,Bijan,60
+Felix + Solly,RB,Jahmyr Gibbs,60
+Bobby + Az,RB,Kyren,33
+Al + Teddy,RB,James Cook,21
+Morn + Vic,RB,Derrick Henry,36
+Ween + Joe,RB,CMC,43
+Felix + Solly,RB,Pollard,5
+Bobby + Az,RB,Kenny W,20
+Al + Teddy,RB,Jacobs,36
+Morn + Vic,WR,Amon Ra,49
+Ween + Joe,WR,Higgins,24
+Felix + Solly,WR,AJ Brown,30
+Bobby + Az,WR,Reek,27
+Al + Teddy,WR,London,37
+Morn + Vic,WR,Mike Evans,21
+Ween + Joe,WR,Ladd,36
+Felix + Solly,WR,Puka,44
+Bobby + Az,WR,Garrett,24
+Al + Teddy,WR,Waddle,8
+Morn + Vic,WR,Terry,14
+Ween + Joe,WR,Travis Hunter,4
+Felix + Solly,WR,Pittman,1
+Bobby + Az,WR,Marv,18
+Al + Teddy,WR,DK,9
+Morn + Vic,TE,Kittle,11
+Ween + Joe,TE,Mandrews,1
+Felix + Solly,TE,Tyler Warren,8
+Bobby + Az,TE,Hock,1
+Al + Teddy,TE,Njoku,3
+Morn + Vic,FLEX,Shakir,1
+Ween + Joe,FLEX,Olave,5
+Felix + Solly,FLEX,Burden,1
+Bobby + Az,FLEX,Connor,10
+Al + Teddy,FLEX,Zay,6
+Morn + Vic,K,Butker,1
+Ween + Joe,K,Dicker,1
+Felix + Solly,K,Elliot,1
+Bobby + Az,K,Aubrey,4
+Al + Teddy,K,Cinncy,1
+Morn + Vic,DEF,Ferguson,1
+Ween + Joe,DEF,Ravens D,1
+Felix + Solly,DEF,Packers d,1
+Bobby + Az,DEF,Steelers D,1
+Al + Teddy,DEF,Bigsby,1
+Morn + Vic,BENCH,Stafford,1
+Ween + Joe,BENCH,Doubs,1
+Felix + Solly,BENCH,Mooney,1
+Bobby + Az,BENCH,Ridley,9
+Al + Teddy,BENCH,Kaleb Johnson,1
+Morn + Vic,BENCH,Chris Godwin,2
+Ween + Joe,BENCH,Kirk,1
+Felix + Solly,BENCH,Skattebo,1
+Bobby + Az,BENCH,Odunze,3
+Al + Teddy,BENCH,Monty,7
+Morn + Vic,BENCH,Reed,1
+Ween + Joe,BENCH,Aiyuk,1
+Felix + Solly,BENCH,Legette,1
+Bobby + Az,BENCH,Aaron Jones,3
+Al + Teddy,BENCH,Devonta S,9
+Morn + Vic,BENCH,Judkins,1
+Ween + Joe,BENCH,Dobbins,1
+Felix + Solly,BENCH,Palmer,1
+Bobby + Az,BENCH,Javonte,2
+Al + Teddy,BENCH,Evan Engram,2
+Morn + Vic,BENCH,Mitchell,1
+Ween + Joe,BENCH,Guerrendo,1
+Felix + Solly,BENCH,White,1
+Bobby + Az,BENCH,Penix,1
+Al + Teddy,BENCH,TLaw,1
+Morn + Vic,BENCH,Bateman,1
+Ween + Joe,BENCH,Rodgers,1
+Felix + Solly,BENCH,Najee,1
+Bobby + Az,BENCH,Deebo,2
+Al + Teddy,BENCH,Addison,1
+Ades + Marco,QB,Dak,16
+Wahba + Alche,QB,Goff,9
+Abner + Dabah,QB,Patrick Mahome,20
+Law + Dnat,QB,Bo Nix,16
+Zet + JoAz,QB,Hurts,38
+Ades + Marco,QB,Maye,12
+Wahba + Alche,QB,Jallen,36
+Abner + Dabah,QB,Darnold,3
+Law + Dnat,QB,JJ McCarthy,3
+Zet + JoAz,QB,Baker,12
+Ades + Marco,RB,Chase Brown,40
+Wahba + Alche,RB,Bucky Irving,41
+Abner + Dabah,RB,Jeanty,45
+Law + Dnat,RB,Hampton,19
+Zet + JoAz,RB,Saquon,58
+Ades + Marco,RB,Henderson,10
+Wahba + Alche,RB,Kamara,20
+Abner + Dabah,RB,JT,37
+Law + Dnat,RB,Harvey,9
+Zet + JoAz,RB,Breece,13
+Ades + Marco,WR,CeeDee,49
+Wahba + Alche,WR,Justin Jefferson,47
+Abner + Dabah,WR,Nabers,47
+Law + Dnat,WR,Jamarr Chase,60
+Zet + JoAz,WR,Nico Collins,41
+Ades + Marco,WR,Rice,9
+Wahba + Alche,WR,BTJ,36
+Abner + Dabah,WR,JSN,26
+Law + Dnat,WR,Tet,12
+Zet + JoAz,WR,Pickens,9
+Ades + Marco,WR,Tae,11
+Wahba + Alche,WR,Shahheed,1
+Abner + Dabah,WR,Jeudy,6
+Law + Dnat,WR,Courtsut,17
+Zet + JoAz,WR,Egbuka,4
+Ades + Marco,TE,McBride,16
+Wahba + Alche,TE,Pitts,1
+Abner + Dabah,TE,Kelce,4
+Law + Dnat,TE,Brock Bowers,27
+Zet + JoAz,TE,LaPorta,5
+Ades + Marco,FLEX,DJ Moore,14
+Wahba + Alche,FLEX,Marvin Mims,1
+Abner + Dabah,FLEX,Meyers,3
+Law + Dnat,FLEX,Worthy,8
+Zet + JoAz,FLEX,Diggs,3
+Wahba + Alche,K,Bates,1
+Abner + Dabah,K,AR,1
+Law + Dnat,K,Little,1
+Zet + JoAz,K,Boswell,1
+Ades + Marco,DEF,Sampson,1
+Wahba + Alche,DEF,Arizona D,1
+Abner + Dabah,DEF,Thielen,1
+Law + Dnat,DEF,jauan jennings,1
+Zet + JoAz,DEF,Broncos,1
+Ades + Marco,BENCH,Jmo,12
+Wahba + Alche,BENCH,Braelon Allen,1
+Abner + Dabah,BENCH,Geno Smith,1
+Law + Dnat,BENCH,Pacheco,6
+Zet + JoAz,BENCH,Brob,2
+Ades + Marco,BENCH,Cam Ward,2
+Wahba + Alche,BENCH,Keenan,1
+Abner + Dabah,BENCH,Downs,2
+Law + Dnat,BENCH,Hubbard,12
+Zet + JoAz,BENCH,Etienne,5
+Ades + Marco,BENCH,Pearsall,3
+Wahba + Alche,BENCH,Ekeler,1
+Abner + Dabah,BENCH,Charbannet,1
+Law + Dnat,BENCH,Swift,5
+Zet + JoAz,BENCH,Kupp,2
+Ades + Marco,BENCH,Tracy,2
+Wahba + Alche,BENCH,Kraft,1
+Abner + Dabah,BENCH,Coleman,1
+Law + Dnat,BENCH,Bryce,1
+Zet + JoAz,BENCH,Tua,2
+Ades + Marco,BENCH,Warren,1
+Wahba + Alche,BENCH,Russ,1
+Abner + Dabah,BENCH,Chubb,1
+Law + Dnat,BENCH,Mason,2
+Zet + JoAz,BENCH,Mixon,1
+Ades + Marco,BENCH,JCW,1
+Wahba + Alche,BENCH,Coop,1
+Abner + Dabah,BENCH,Goedert,1
+Law + Dnat,BENCH,Tillman,1
+Zet + JoAz,BENCH,Golden,3

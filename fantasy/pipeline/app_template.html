@@ -366,11 +366,21 @@ function posMarket(pos, L) {
     if (!p || p.pos !== pos) return;
     paid += s.price; list += Math.max(1, p.auc); n++;
   });
-  if (n < 3 || list <= 0) return { n, ratio: null, lean: 1 };
-  const ratio = paid / list;              // >1 means the room is paying up here
+  const live = (n > 0 && list > 0) ? paid / list : null;
+
+  // Your own league's 2025 sheet is a far better starting guess than "assume the
+  // room is rational". Shrink from that prior toward what is happening tonight as
+  // the sales pile up — eight sales at a position and the live read has the floor.
+  const prior = (RESEARCH.room && RESEARCH.room.ratio) ? RESEARCH.room.ratio[pos] : null;
+  let ratio;
+  if (live == null) ratio = prior;
+  else if (prior == null) ratio = live;
+  else { const w = n / (n + 8); ratio = w * live + (1 - w) * prior; }
+  if (ratio == null) return { n, ratio: null, live, prior, lean: 1 };
+
   // lean the other way, gently, and never by more than 15%
   const lean = Math.max(0.85, Math.min(1.15, 1 + (1 - ratio) * 0.5));
-  return { n, ratio, lean };
+  return { n, ratio, live, prior, lean };
 }
 
 /* Market price after inflation — what this player should go for right now. */
@@ -717,6 +727,23 @@ function renderFindings() {
   </div>
 
   <div class="finding">
+    <p class="eyebrow">Your room, measured</p>
+    <div class="bignum good">${fmt(R.room.ratio.QB * 100)}¢</div>
+    <p>What your league paid on the dollar for quarterbacks in ${R.room.season}, against what they were worth
+    that season. Tight ends went for ${fmt(R.room.ratio.TE * 100)}¢. Running backs went for
+    ${fmt(R.room.ratio.RB * 100)}¢ and receivers ${fmt(R.room.ratio.WR * 100)}¢. Your room spends
+    ${fmt(R.room.room_pct.QB, 1)}% of its money on the position it has to start <strong>two</strong> of, when the
+    board says ${fmt(R.room.fair_pct.QB, 1)}%. They are bidding a two-quarterback league as though it were a
+    normal one, and paying for it at running back.</p>
+    <p>This is the one place a positional lean is justified, because it is not a rule — it is a measurement of
+    the nine people you are actually bidding against. The Auction Room starts from these numbers and shifts
+    toward tonight's sales as they come in.</p>
+    <dl class="kv">
+      ${["QB", "TE", "WR", "RB"].map(pp => `<dt>${pp}</dt><dd class="num">${fmt(R.room.ratio[pp] * 100)}¢ on the dollar</dd>`).join("")}
+    </dl>
+  </div>
+
+  <div class="finding">
     <p class="eyebrow">There is no magic premium</p>
     <div class="bignum bad">${fmt(R.field.qb_density[0].edge, 1)} to ${fmt(R.field.qb_density[R.field.qb_density.length - 1].edge, 1)}</div>
     <p>An earlier version of this page told you to pay 25% over list for quarterbacks. That was wrong, and the
@@ -880,11 +907,15 @@ function renderDraft() {
         if (!mk.length) return "";
         mk.sort((a, b) => a[1].ratio - b[1].ratio);
         const cheap = mk[0], rich = mk[mk.length - 1];
+        const anyLive = mk.some(x => x[1].n > 0);
         return `<div style="margin-top:.7rem">
-          <p class="eyebrow" style="margin-bottom:.35rem">What this room is paying, by position</p>
+          <p class="eyebrow" style="margin-bottom:.35rem">What this room pays, by position
+            <span class="psub" style="text-transform:none;letter-spacing:0">${anyLive
+              ? "— tonight's sales, shrunk toward your 2025 sheet"
+              : "— from your league's 2025 sheet, until tonight's sales say otherwise"}</span></p>
           <div class="chips">${mk.map(([pp, m]) => `<span class="chip" style="cursor:default">
             <span style="color:var(--${pp.toLowerCase()})">${pp}</span>
-            ${fmt(m.ratio * 100)}¢ <span class="psub">on the dollar · ${m.n} sold</span></span>`).join("")}</div>
+            ${fmt(m.ratio * 100)}¢ <span class="psub">on the dollar${m.n ? " · " + m.n + " sold" : ""}</span></span>`).join("")}</div>
           ${cheap[1].ratio < 0.92 ? `<p class="hint" style="margin:.4rem 0 0">
             <span class="flag good">Buy</span> ${cheap[0]} is going for ${fmt(cheap[1].ratio * 100)}¢ on the dollar in this room —
             that is where your money stretches furthest.${rich[1].ratio > 1.08

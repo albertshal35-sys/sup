@@ -15,6 +15,7 @@ AUC = json.load(open("out/research_auction_real.json"))
 WAAJ = json.load(open("out/research_waa.json"))
 FIELD = json.load(open("out/research_field.json"))
 QBD = json.load(open("out/research_qb_density.json"))
+ROOM = json.load(open("out/room_bias.json"))
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -191,6 +192,12 @@ _tot = sum(p["auc"] for p in players)
 for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
     split[pos] = round(sum(p["auc"] for p in players if p["pos"] == pos) / _tot * 100, 1)
 RESEARCH["budget_split"] = split
+RESEARCH["room"] = dict(
+    ratio={p: v["ratio"] for p, v in ROOM.items()},
+    room_pct={p: v["room_pct"] for p, v in ROOM.items()},
+    fair_pct={p: v["fair_pct"] for p, v in ROOM.items()},
+    season=2025)
+print("room read (¢ on the dollar, 2025):", {p: round(v["ratio"] * 100) for p, v in ROOM.items()})
 RESEARCH["waa"] = dict(
     acc_waa=WAAJ["acc_waa"], acc_pts=WAAJ["acc_pts"],
     win_waa=WAAJ["wins"], win_pts=WAAJ["points"], diff=WAAJ["diff"], se=WAAJ["se"])

@@ -152,7 +152,35 @@ with the room.
 So the tool ships **no fixed positional lean.** What replaces it is a live read: the
 Auction Room tracks what your actual room has paid for each position against list, and
 points you at whatever it is neglecting. That is the only version of "buy low" that cannot
-be arbitraged away by the other eleven managers, because it is defined by them.
+be arbitraged away by the other managers, because it is defined by them.
+
+### Your room, measured
+
+The 2025 draft sheet (`pipeline/data/league_2025.csv`, parsed from the league tracker) says
+this is not a hypothetical. Comparing what the ten teams paid against what those players
+were worth going into 2025:
+
+| | Paid | Board said | On the dollar |
+|---|---|---|---|
+| QB | 17.9% | 29.0% | **62¢** |
+| TE | 4.2% | 8.7% | **48¢** |
+| WR | 41.6% | 37.5% | 111¢ |
+| RB | 36.3% | 24.8% | **146¢** |
+
+Six of the eight biggest bargains in the room were quarterbacks — Tua at $2 against $26 of
+value, Goff at $9 against $31, Mayfield at $12 against $31. The eight biggest overpays were
+all elite backs and receivers: Gibbs $60, McCaffrey $43, Bijan $60, Saquon $58.
+
+**This league bids a two-quarterback format as though it were a normal one**, and pays for
+it at running back. That is a large, specific, repeatable edge, and it is the one place a
+positional lean is justified — because it is a measurement of the nine people you are
+bidding against rather than a rule imported from somewhere else.
+
+The Auction Room starts from these ratios and shrinks toward tonight's sales as they
+accumulate; after about eight sales at a position the live read dominates. One caveat worth
+holding: part of the running-back gap is the projections being conservative about elite
+players, since they multiply points per game by *expected* games. The quarterback and tight
+end gaps cannot be explained that way.
 
 ## Reproducing it
 
