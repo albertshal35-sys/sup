@@ -14,7 +14,7 @@ FLEX = 1
 FLEX_POS = ["RB", "WR", "TE"]
 
 
-def replacement_table(df, teams=12, lineup=LINEUP, flex=FLEX):
+def replacement_table(df, teams=10, lineup=LINEUP, flex=FLEX):
     """Allocate every starting slot in the league, then read off the first man out."""
     out = {}
     base = {p: n * teams for p, n in lineup.items()}
@@ -44,8 +44,8 @@ for y in range(1999, 2026):
     d = sp[sp.season == y]
     if len(d) == 0:
         continue
-    rep12 = replacement_table(d, 12)
-    rep1qb = replacement_table(d, 12, dict(QB=1, RB=2, WR=3, TE=1), 1)
+    rep12 = replacement_table(d, 10)
+    rep1qb = replacement_table(d, 10, dict(QB=1, RB=2, WR=3, TE=1), 1)
     for p in ["QB", "RB", "WR", "TE"]:
         top = d[d.position == p].sort_values("fpts", ascending=False)
         rows.append(dict(season=y, pos=p, starters=rep12[p]["starters"], repl=rep12[p]["repl"],
@@ -59,7 +59,7 @@ for y in range(1999, 2026):
                          vorp12=(top.fpts.iloc[11] - rep12[p]["repl"]) if len(top) > 11 else np.nan))
 rep = pd.DataFrame(rows)
 print("=" * 78)
-print("A. REPLACEMENT LEVEL & VORP  —  2QB/2RB/3WR/1TE/1FLEX, 12 teams (mean 2015-2025)")
+print("A. REPLACEMENT LEVEL & VORP  —  2QB/2RB/3WR/1TE/1FLEX, 10 teams (mean 2015-2025)")
 print("=" * 78)
 mod = rep[rep.season >= 2015]
 agg = mod.groupby("pos").agg(starters=("starters", "mean"), repl=("repl", "mean"),
@@ -82,7 +82,7 @@ for p in ["QB", "RB", "WR", "TE"]:
     vals = []
     for y in range(2015, 2026):
         d = sp[(sp.season == y)]
-        rr = replacement_table(d, 12)[p]["repl"]
+        rr = replacement_table(d, 10)[p]["repl"]
         top = d[d.position == p].sort_values("fpts", ascending=False)["fpts"].values
         vals.append([(top[i] - rr) if i < len(top) else np.nan for i in range(60)])
     m = np.nanmean(np.array(vals), axis=0)

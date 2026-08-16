@@ -253,7 +253,7 @@ details.method .pad { font-size: .84rem; color: var(--ink-2); }
   <div class="topbar">
     <div class="brand">
       <span class="name">Gridiron Moneyball</span>
-      <span class="sub">2QB PPR auction</span>
+      <span class="sub">2QB PPR auction &middot; 10 teams</span>
     </div>
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-board" aria-selected="true" aria-controls="panel-board">Rankings</button>
@@ -289,7 +289,7 @@ const fmt = (n, d) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(d == n
    ================================================================== */
 const S = {
   tab: "board",
-  teams: 12,
+  teams: 10,
   budget: 200,
   sales: [],            // {id, price, mine}
   boardFilter: "ALL",
@@ -307,7 +307,7 @@ function save() {
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY) || "null");
-    if (r) { S.teams = r.teams || 12; S.budget = r.budget || 200; S.sales = r.sales || []; }
+    if (r) { S.teams = r.teams || 10; S.budget = r.budget || 200; S.sales = r.sales || []; }
   } catch (e) {}
 }
 
@@ -542,6 +542,8 @@ function renderBoard() {
         Auction values for <strong>this</strong> lineup — 2QB, 2RB, 3WR, 1TE, 1 flex, full PPR, ${S.teams} teams at
         $${S.budget} each. A player's price is what he scores above the last man bought at his position, scaled so
         the room's whole budget is accounted for; the dollars on this page sum to the dollars in the league.
+        Change the team count in the Auction Room and the ceilings follow, but the printed prices are built for
+        a ${DATA.meta.teams}-team room.
         Projections come from gradient-boosted models trained on every player season from 1999 to 2025
         (${DATA.meta.player_seasons.toLocaleString()} of them), scored under your rules.
       </p>
@@ -719,11 +721,13 @@ function renderFindings() {
     <div class="bignum bad">${fmt(R.field.qb_density[0].edge, 1)} to ${fmt(R.field.qb_density[R.field.qb_density.length - 1].edge, 1)}</div>
     <p>An earlier version of this page told you to pay 25% over list for quarterbacks. That was wrong, and the
     way it was wrong is the most useful thing here. It won its first tournament because it was competing against
-    eleven <em>other</em> gimmick strategies. Re-run against ordinary value bidders and it loses at every density
-    — whether two managers do it or ten. Every fixed positional premium tested behaved the same way: they are
-    trades against the room, not properties of the game. The board ships neutral.</p>
+    eleven <em>other</em> gimmick strategies. Re-run against ordinary value bidders, the edge decays to nothing
+    as the room catches on: worth a little while you are one of two doing it, worth less than nothing once
+    several are. Every fixed positional premium tested behaved the same way. They are trades against the room,
+    not properties of the game, so the board ships neutral and reads the room instead.</p>
     <dl class="kv">
-      ${R.field.qb_density.map(d => `<dt>${d.n} of 12 pay up for QBs</dt><dd class="num">${fmt(d.edge, 1)} pp</dd>`).join("")}
+      ${R.field.qb_density.map(d => `<dt>${d.n} of ${DATA.meta.teams} pay up for QBs</dt>
+        <dd class="num">${d.edge >= 0 ? "+" : ""}${fmt(d.edge, 1)} pp</dd>`).join("")}
     </dl>
   </div>
 

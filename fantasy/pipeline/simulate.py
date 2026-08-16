@@ -94,7 +94,7 @@ LINEUP = dict(QB=2, RB=2, WR=3, TE=1)
 FLEX_N = 1
 FLEX_POS = ("RB", "WR", "TE")
 ROUNDS = 15
-TEAMS = 12
+TEAMS = 10
 CAP = dict(QB=4, RB=6, WR=7, TE=3)   # nobody rosters 8 QBs
 
 

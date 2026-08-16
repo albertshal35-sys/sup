@@ -8,7 +8,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 
 warnings.filterwarnings("ignore")
 sp = pd.read_parquet("out/player_seasons.parquet")
-TEAMS = 12
+TEAMS = 10
 LINEUP = dict(QB=2, RB=2, WR=3, TE=1)
 FLEX_N, FLEX_POS = 1, ("RB", "WR", "TE")
 BENCH, ROSTER = 6, 17

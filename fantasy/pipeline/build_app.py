@@ -198,7 +198,9 @@ RESEARCH["field"] = dict(
     vol_rare=FIELD["volatile|2"]["edge"], vol_half=FIELD["volatile|6"]["edge"],
     vol_common=FIELD["volatile|10"]["edge"],
     safe_rare=FIELD["safe|2"]["edge"], safe_common=FIELD["safe|10"]["edge"],
-    qb_density=[dict(n=int(k), edge=v["edge"], se=v["se"]) for k, v in sorted(QBD.items(), key=lambda x: int(x[0]))])
+    qb_density=[dict(n=int(k), edge=v["edge"], se=v["se"])
+                for k, v in sorted(QBD.items(), key=lambda x: int(x[0]))
+                if v.get("se") is not None])
 print("corrected: QB premium by density ->", RESEARCH["field"]["qb_density"])
 
 # ---------------------------------------------------------------- auction study
@@ -227,7 +229,7 @@ print("auction study:", {k: v for k, v in RESEARCH["auction"].items() if k != "t
 print("budget split (% of a team's money):", split)
 
 DATA = dict(players=players,
-            meta=dict(player_seasons=int(len(sp)), sim_seasons=12,
+            meta=dict(player_seasons=int(len(sp)), sim_seasons=12, teams=10, budget=200,
                       seasons="1999-2025", built="2026-08-16"))
 
 tpl = open("app_template.html").read()

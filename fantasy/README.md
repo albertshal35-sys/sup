@@ -8,7 +8,7 @@ An auction board and live bidding assistant for one specific league:
 | Starters | 2 QB · 2 RB · 3 WR · 1 TE · 1 FLEX (RB/WR/TE) · 1 D/ST · 1 K |
 | Bench | 6 |
 | Roster | 17 |
-| Teams | 12 (configurable) |
+| Teams | 10 (configurable) |
 | Format | **Auction**, $200 budget (configurable) |
 
 The lineup is the whole point. Almost every ranking you can find online is built for a
@@ -21,8 +21,8 @@ that costs games. Everything here is computed against *these* rules.
 any browser, including on a phone at the draft table.
 
 **Rankings** — every draftable player priced in dollars, with projections, tiers, VORP,
-bye weeks, and risk flags. The prices sum to the money in the room: 12 teams × $200 =
-$2,400 on the board, so a player's price is his share of the league's budget.
+bye weeks, and risk flags. The prices sum to the money in the room: 10 teams × $200 =
+$2,000 on the board, so a player's price is his share of the league's budget.
 
 **Auction Room** — log every sale as it happens, yours and everyone else's. It tracks your
 budget, your maximum legal bid, the live inflation rate, and what your room has actually
@@ -51,9 +51,9 @@ kicking — re-scored under the league's exact rules.
 ### The findings that shaped the board
 
 **The two-quarterback rule is the league.** Starting two QBs drags replacement level from
-QB13 down to QB25, which adds about **85 points** of value to the top quarterback compared
-to a standard league. Twenty-four QBs start every week and roughly thirty-two exist, which
-is why about a fifth of your budget belongs at the position. Note what this does *not*
+QB11 down to QB21, which adds about **74 points** of value to the top quarterback compared
+to a standard league. Twenty QBs start every week and roughly thirty-two exist, which is
+why about a quarter of your budget belongs at the position. Note what this does *not*
 license: see the quarterback premium below, which failed its own test.
 
 **Buy volume, never touchdowns.** Carries and targets are the stickiest things a player
@@ -73,11 +73,18 @@ They are priced at a dollar or two and the Auction Room caps your bid on them at
 A player's price is what he scores above the last man bought at his position — not above
 the last *starter*, because everyone below that line costs a dollar. Those surpluses are
 scaled so the league's whole discretionary budget (total money minus the $1 each roster
-spot must reserve) is exactly accounted for. The board sums to $2,399 against $2,400 in
+spot must reserve) is exactly accounted for. The board sums to $1,995 against $2,000 in
 the room.
 
-That lands at roughly **20% of your money on quarterbacks, 27% on backs, 39% on receivers,
-11% on tight ends, and 2% on kicker and defense combined.**
+That lands at roughly **24% of your money on quarterbacks, 28% on backs, 36% on receivers,
+10% on tight ends, and 2% on kicker and defense combined.**
+
+Ten teams matters more than it sounds. Every replacement level rises, because a shallower
+league starts fewer players at each position: against a twelve-team room, quarterback
+replacement climbs from QB25 to QB21 and receiver from WR43 to WR37. The players you can
+stream in-season are better, which makes the expensive ones worth relatively less. The
+board is rebuilt for ten; change the team count in the Auction Room and your bid ceilings
+follow, but the printed prices assume a ten-team room.
 
 ### Custom statistics
 
@@ -106,32 +113,35 @@ Blank as descriptive columns for breaking ties and knowing what you are buying.
 
 Twelve bidding strategies competed in replayed auctions across 2014–2025 — random
 nomination order, English bidding settled at second price plus a dollar, every team forced
-to finish with a legal roster, lineups set up front rather than with hindsight.
+to finish with a legal roster, lineups set up front rather than with hindsight. Re-run for
+a ten-team room; the orderings held.
 
 Two results survive every robustness check:
 
-**Track inflation (+5.0).** The largest durable edge. Bidders who re-priced the board as
+**Track inflation (+4.1).** The largest durable edge. Bidders who re-priced the board as
 money left the room beat bidders who stuck to preseason values. When early lots go cheap
 the leftover cash has to land on somebody. This is why the app asks you to log the players
 you *lose* — those sales tell you more than your own do.
 
-**Do not play stars and scrubs (−11.2).** The worst strategy tested by a wide margin. This
+**Do not play stars and scrubs (−9.5).** The worst strategy tested by a wide margin. This
 lineup starts nine and flexes a tenth; three stars and six holes loses more in the holes
-than it gains at the top. Winning teams spent about $171 of $200 and finished around
-3 QB, 4 RB, 6 WR, 2 TE.
+than it gains at the top. The best-performing honest strategy spent about $156 of $200 and
+finished around 3 QB, 4 RB, 6 WR, 2 TE.
 
 **And one result that did not survive.** An earlier version of this tool told you to pay
-25% over list for quarterbacks, on the strength of a +4.5 point win rate in that
-tournament. It was wrong. That arm was competing against eleven *other* gimmick strategies;
-re-run against ordinary value bidders it loses at every density tested:
+25% over list for quarterbacks, on the strength of a +4.6 point win rate in that
+tournament. It was wrong. That arm was competing against eleven *other* gimmick strategies.
+Re-run against ordinary value bidders, the edge decays to nothing as the room catches on:
 
-| How many of 12 pay up for QBs | Their edge |
+| How many pay up for QBs | Their edge |
 |---|---|
-| 2 | −1.0 pp |
-| 4 | −1.2 pp |
-| 6 | −1.8 pp |
-| 8 | −2.3 pp |
-| 10 | −2.3 pp |
+| 2 | +0.9 pp |
+| 4 | +0.0 pp |
+| 6 | −0.5 pp |
+| 8 | −0.7 pp |
+
+Worth a little while you are one of two doing it; worth less than nothing once several
+are. That is a description of a crowding trade, not a strategy.
 
 Testing every other tilt the same way produced the same lesson. Paying up for boom-bust
 players at equal projected points gained **+5.4** points when only two teams did it and
