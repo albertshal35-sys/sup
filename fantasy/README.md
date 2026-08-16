@@ -24,6 +24,11 @@ any browser, including on a phone at the draft table.
 bye weeks, and risk flags. The prices sum to the money in the room: 10 teams × $200 =
 $2,000 on the board, so a player's price is his share of the league's budget.
 
+**The Leap** — situational calls the price sheet cannot make: who moved up a depth chart,
+whose team lost half its targets, who changed coaches, who was being fed by December, and
+what each 2026 schedule actually serves up. Scored against the board rather than in place
+of it, with its own accuracy printed at the top.
+
 **Auction Room** — log every sale as it happens, yours and everyone else's. It tracks your
 budget, your maximum legal bid, the live inflation rate, and what your room has actually
 been paying for each position against list — then tells you what a player is worth *right
@@ -154,6 +159,34 @@ Auction Room tracks what your actual room has paid for each position against lis
 points you at whatever it is neglecting. That is the only version of "buy low" that cannot
 be arbitraged away by the other managers, because it is defined by them.
 
+### The Leap: situational signals
+
+The board prices a player on what he did. A breakout list can only add value if it predicts
+what the board *missed*, so the target is the residual — points above or below projection —
+and every signal is computed for past seasons too and scored leave-one-season-out.
+
+| Signal | What it is |
+|---|---|
+| **Climb** | Depth chart position today against last preseason |
+| **Vacated** | Targets and carries that left his team |
+| **Coach** | New head coach (7 teams for 2026) |
+| **Trend** | Back-half usage minus front-half usage last season |
+| **TD luck** | Scored under what his volume deserved |
+| **Leap** | Year two and three, where the age curve is steepest |
+| **SOS** | 2026 opponents graded on what they allowed to his position in 2025 |
+
+Between the top fifth and the bottom fifth: **+29 points** of season-long residual, ±5.4,
+across 1,609 player-seasons. Rank correlation 0.176 — modest, and stated as such on the tab.
+
+Depth chart position and movement carry nearly all of it. Schedule finished near the bottom.
+Changing teams is a **negative** on average, which is the opposite of how a draft room
+usually treats it.
+
+One correction worth recording: the first version of this measured +54 points, because it
+used end-of-season depth charts to "predict" seasons that had already happened. Using the
+preseason snapshot — the only thing you actually have in August — halved the effect. The
++29 is the honest number.
+
 ### Your room, measured
 
 The 2025 draft sheet (`pipeline/data/league_2025.csv`, parsed from the league tracker) says
@@ -208,8 +241,11 @@ python build_app.py             # emit the app
 
 ## What this does not know
 
-No injury reports, depth charts, holdouts, suspensions, coaching changes, or camp news. A
-player who changed teams is projected from his old team's usage. Rookies get the historical
+No beat reporting, camp buzz, press conferences, or contract talk. Depth charts, rosters and
+coaching changes **are** in there and are current as of the build date, but a hamstring
+reported this morning is invisible. Where the model and your ears disagree about a job
+battle, trust your ears. A player who changed teams is still projected from his old team's
+usage. Rookies get the historical
 average for their draft-capital bucket and nothing else — no scouting.
 
 Treat it as a price sheet built from what actually happened, not a substitute for knowing

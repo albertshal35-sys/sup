@@ -16,6 +16,9 @@ WAAJ = json.load(open("out/research_waa.json"))
 FIELD = json.load(open("out/research_field.json"))
 QBD = json.load(open("out/research_qb_density.json"))
 ROOM = json.load(open("out/room_bias.json"))
+BRK = json.load(open("out/research_breakout.json"))
+BB = pd.read_parquet("out/breakout_board.parquet")
+SOS = pd.read_parquet("out/sos_2026.parquet")
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -192,6 +195,31 @@ _tot = sum(p["auc"] for p in players)
 for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
     split[pos] = round(sum(p["auc"] for p in players if p["pos"] == pos) / _tot * 100, 1)
 RESEARCH["budget_split"] = split
+def _l(v):
+    return list(v) if isinstance(v, (list, np.ndarray)) else []
+
+
+RESEARCH["breakout"] = dict(
+    rho=BRK["rho"], spread=BRK["spread"], se=BRK["se"], n=BRK["n"],
+    seasons=BRK["seasons"], signals=BRK["signals"],
+    picks=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
+                team=(None if pd.isna(r.team) else str(r.team)),
+                bye=(None if pd.isna(r.bye) else int(r.bye)),
+                auc=int(r.auction), pts=clean(r.proj_total, 0),
+                edge=clean(r.edge, 0), edged=clean(r["edge_$"], 0),
+                why=_l(r.why), risk=_l(r.risk))
+           for _, r in BB.nlargest(24, "edge").iterrows()],
+    fades=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
+                team=(None if pd.isna(r.team) else str(r.team)),
+                auc=int(r.auction), edge=clean(r.edge, 0), risk=_l(r.risk))
+           for _, r in BB[BB.auction >= 8].nsmallest(12, "edge").iterrows()],
+    sos=[dict(team=str(r.team), pos=str(r.position), sos=clean(r.sos, 2),
+              playoff=clean(r.sos_playoff, 2))
+         for _, r in SOS.dropna(subset=["sos"]).iterrows()])
+print("breakout picks:", len(RESEARCH["breakout"]["picks"]),
+      "| fades:", len(RESEARCH["breakout"]["fades"]),
+      "| sos rows:", len(RESEARCH["breakout"]["sos"]))
+
 RESEARCH["room"] = dict(
     ratio={p: v["ratio"] for p, v in ROOM.items()},
     room_pct={p: v["room_pct"] for p, v in ROOM.items()},
