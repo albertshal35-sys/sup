@@ -55,6 +55,44 @@ function chunkStart(cfg: ConnectorCfg, to: string): string {
   return isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id) ? dayShift(to, -ACRIS_CHUNK_DAYS) : monthShift(to, -1);
 }
 
+/**
+ * Where the crawl's cursor lands after one chunk — the whole correctness
+ * argument for the backfill, kept as a pure function so it can be reasoned
+ * about (and tested) on its own.
+ *
+ * A window that saturated the pull budget was only read back as far as its
+ * oldest returned record, so the cursor resumes there rather than stepping
+ * over the remainder: the crawl advances more slowly but never leaves a
+ * hole. `+1 day` because the cursor is date-granular and that day was read
+ * only in part — the overlap re-reads at most one day, which the
+ * doc-number upserts already ignore.
+ *
+ * `stalled` marks the one case that genuinely loses records: a single day
+ * holding more than one pull can read, or rows with no usable date to
+ * resume from. The crawl steps off it so it cannot spin, and says so.
+ */
+export function advanceCursor(input: {
+  /** Newest bound of the window just read. */
+  to: string;
+  /** Oldest bound the chunk intended to reach. */
+  from: string;
+  /** Where the whole crawl stops. */
+  target: string;
+  truncated: boolean;
+  /** Oldest date the pull actually reached, when it was cut short. */
+  resumeCursor: string | null;
+}): { next: string; stalled: boolean; done: boolean } {
+  const { to, from, target, truncated, resumeCursor } = input;
+  let next = from;
+  let stalled = false;
+  if (truncated) {
+    const resume = resumeCursor ? dayShift(resumeCursor, 1) : null;
+    if (resume && resume < to) next = resume;
+    else { next = dayShift(to, -1); stalled = true; }
+  }
+  return { next, stalled, done: next <= target };
+}
+
 export async function backfillEligible(env: Env, id: string): Promise<boolean> {
   if (!RECORD_CONNECTORS[id]) return false;
   const cfg = await getConnectorConfig(env, id);
@@ -116,25 +154,10 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
     const markets = await getMarkets(env);
     const result = await acquireAndIngest(env, cfg, markets, { from, to });
 
-    // A window that saturated the pull budget was only read back as far as
-    // its oldest returned record. Resume from there rather than stepping
-    // over the remainder: the crawl advances more slowly but never leaves a
-    // hole, so coverage converges to complete at whatever rate the budget
-    // allows. `+1 day` because the cursor is date-granular and that day was
-    // read only in part — the overlap re-reads at most one day, which the
-    // doc-number upserts already ignore.
-    let next = from;
-    let stalled = false;
-    if (result.truncated) {
-      const resume = result.resumeCursor ? dayShift(result.resumeCursor, 1) : null;
-      if (resume && resume < to) next = resume;
-      // Either a single day held more than the budget, or the rows carried
-      // no usable date to resume from. Step back one day so the crawl can't
-      // spin, and say so rather than advancing over unread records quietly.
-      else { next = dayShift(to, -1); stalled = true; }
-    }
-
-    const done = next <= state.target_date;
+    const { next, stalled, done } = advanceCursor({
+      to, from, target: state.target_date,
+      truncated: Boolean(result.truncated), resumeCursor: result.resumeCursor ?? null,
+    });
     await env.DB.prepare(
       // COALESCE, not assignment: a budget stall means one day was read
       // only in part and the crawl stepped past the remainder. That's the

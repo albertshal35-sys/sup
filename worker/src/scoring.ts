@@ -19,6 +19,39 @@
 import type { Env } from "./index";
 import { recomputeCashFlags } from "./acris";
 
+/**
+ * Debt position against the parcel's estimated market value.
+ *
+ * Returns nulls when value is unknown rather than substituting a guess: a
+ * fabricated LTV would rank leads confidently and wrongly, which is worse
+ * than ranking them on urgency alone. Note the value is derived from NYC
+ * assessed value grossed up by the statutory assessment ratio (see
+ * pluto.ts) — good enough to sort by, not an appraisal.
+ */
+export function positionOf(
+  principal: number,
+  estMarketValue: number | null | undefined
+): { ltvPct: number | null; equity: number | null } {
+  if (!estMarketValue || estMarketValue <= 0 || !Number.isFinite(principal)) {
+    return { ltvPct: null, equity: null };
+  }
+  return {
+    ltvPct: Math.round((principal / estMarketValue) * 100),
+    equity: Math.round(estMarketValue - principal),
+  };
+}
+
+/**
+ * Turn LTV into a 0-100 desirability score. Lower leverage is a better
+ * refi: there is room to lend against. Above ~85% the deal is effectively
+ * unfundable for a private lender, so it bottoms out rather than going
+ * negative and dragging an otherwise urgent lead off the board.
+ */
+export function equityScore(ltvPct: number): number {
+  if (ltvPct <= 0) return 100;
+  return Math.max(0, Math.min(100, Math.round(100 - (ltvPct / 85) * 100)));
+}
+
 export async function rescoreTriggers(env: Env): Promise<number> {
   let emitted = 0;
 
@@ -30,8 +63,17 @@ export async function rescoreTriggers(env: Env): Promise<number> {
   const maturities = await env.DB.prepare(
     `SELECT l.id AS loan_id, l.entity_id, l.property_id, l.principal, l.rate_pct, l.lender_name,
             CAST(julianday(COALESCE(l.maturity_date, date(l.originated_at, '+' || COALESCE(l.term_months,12) || ' months'))) - julianday('now') AS INTEGER) AS days_to_maturity,
-            e.velocity_score, e.flips_36mo
-     FROM loans l JOIN entities e ON e.id = l.entity_id
+            e.velocity_score, e.flips_36mo,
+            p.est_market_value, p.units_total, p.year_built, p.bldg_class,
+            -- Every still-active recorded lien against the same parcel, so
+            -- equity is measured against the whole debt stack rather than
+            -- just the note that happens to be maturing.
+            (SELECT COALESCE(SUM(l2.principal), 0) FROM loans l2
+              WHERE l2.property_id = l.property_id AND l2.status = 'active'
+                AND l2.instrument = 'mortgage') AS stack_principal
+     FROM loans l
+     JOIN entities e ON e.id = l.entity_id
+     LEFT JOIN properties p ON p.id = l.property_id
      WHERE l.status = 'active'
        AND l.lender_type IN ('private','hard_money')
        AND l.originated_at BETWEEN date('now','-10 months') AND date('now','-8 months')`
@@ -39,23 +81,45 @@ export async function rescoreTriggers(env: Env): Promise<number> {
     loan_id: string; entity_id: string; property_id: string; principal: number;
     rate_pct: number; lender_name: string; days_to_maturity: number;
     velocity_score: number; flips_36mo: number;
+    est_market_value: number | null; units_total: number | null;
+    year_built: number | null; bldg_class: string | null; stack_principal: number;
   }>();
 
   for (const m of maturities.results) {
     const urgencyScore = Math.max(0, 100 - m.days_to_maturity); // closer = hotter
-    const score = Math.min(100, Math.round(urgencyScore * 0.7 + m.velocity_score * 0.3));
+    const { ltvPct, equity } = positionOf(m.stack_principal || m.principal, m.est_market_value);
+
+    // Equity is what decides whether a refi is fundable at all, so once it
+    // is known it carries real weight. Without PLUTO the term is simply
+    // absent rather than assumed — an unenriched parcel scores on urgency
+    // and velocity exactly as it did before.
+    const score = Math.min(100, Math.round(
+      ltvPct === null
+        ? urgencyScore * 0.7 + m.velocity_score * 0.3
+        : urgencyScore * 0.5 + m.velocity_score * 0.2 + equityScore(ltvPct) * 0.3
+    ));
+
     emitted += await upsertTrigger(env, {
       kind: "maturity",
       entityId: m.entity_id,
       propertyId: m.property_id,
       refId: m.loan_id,
       score,
-      headline: `Note matures in ~${m.days_to_maturity} days — $${fmtK(m.principal)} with ${m.lender_name}`,
+      headline:
+        `Note matures in ~${m.days_to_maturity} days — $${fmtK(m.principal)} with ${m.lender_name}` +
+        (ltvPct !== null ? ` · ~${ltvPct}% LTV, ~$${fmtK(equity!)} equity` : ""),
       payload: {
         principal: m.principal,
         lender: m.lender_name,
         rate: m.rate_pct,
         daysToMaturity: m.days_to_maturity,
+        stackPrincipal: m.stack_principal || null,
+        estMarketValue: m.est_market_value,
+        ltvPct,
+        equity,
+        unitsTotal: m.units_total,
+        yearBuilt: m.year_built,
+        bldgClass: m.bldg_class,
       },
     });
   }

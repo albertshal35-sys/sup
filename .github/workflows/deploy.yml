@@ -34,6 +34,11 @@ jobs:
       - name: Type-check worker
         run: npx tsc -p worker/tsconfig.json
 
+      # Runs before migrations and deploy: a red suite must stop the release
+      # rather than be discovered after the schema has already moved.
+      - name: Test
+        run: npm test
+
       - name: Build frontend
         run: npm run build
 

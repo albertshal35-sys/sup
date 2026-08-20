@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS properties (
   est_value     INTEGER,                         -- AVM estimate, whole dollars
   lat           REAL,
   lng           REAL,
+  -- PLUTO tax-lot facts, joined on BBL (see migration 0013)
+  lot_area          INTEGER,                     -- square feet
+  bldg_area         INTEGER,                     -- gross square feet
+  units_total       INTEGER,
+  num_floors        REAL,
+  bldg_class        TEXT,                        -- NYC building class, e.g. C4
+  zoning            TEXT,
+  owner_name        TEXT,                        -- owner of record per DOF
+  assessed_value    INTEGER,                     -- raw assesstot, NOT market value
+  est_market_value  INTEGER,                     -- assessed grossed up by assessment ratio
+  tax_class         TEXT,                        -- 1 | 2 | 4, derived from bldg_class
+  pluto_synced_at   TEXT,
   origin        TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   UNIQUE (apn, county, state)
 );

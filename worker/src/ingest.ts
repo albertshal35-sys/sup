@@ -39,6 +39,7 @@ import { gateRecords, recordSourceStats, corroborateStmt, type Provenance } from
 import { acrisCapable, acrisFetch, isAcrisMaster, type PartyAddress } from "./acris";
 import { evaluateCustomSignals } from "./signals";
 import { generateMergeSuggestions } from "./resolution";
+import { syncPluto } from "./pluto";
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 2000, 8000];
@@ -1124,6 +1125,18 @@ export async function processBackgroundWork(env: Env): Promise<void> {
 
 /** Scoring + analytics tail — runs when a seeded sweep finishes draining. */
 export async function runPipelineTail(env: Env): Promise<void> {
+  // PLUTO first: scoring reads est_market_value for equity/LTV, so parcels
+  // enriched this sweep should be priced before triggers are materialized.
+  // Best-effort — a PLUTO outage must not stop the feeds from rescoring.
+  const deedCfg = await getConnectorConfig(env, "county_deeds");
+  if (deedCfg.baseUrl) {
+    await runWithAudit(env, "pluto", async () => ({
+      ingested: await syncPluto(env, deedCfg),
+      skipped: 0,
+      checksum: null,
+    })).catch(() => {});
+  }
+
   await runWithAudit(env, "scoring", async () => ({
     ingested: await rescoreTriggers(env),
     skipped: 0,
