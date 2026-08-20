@@ -172,13 +172,40 @@ Connectors come **pre-filled with real endpoints** (seeded by migrations
 | UCC filings | `appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame` | NY DOS UCC search (scrape; form-driven, see caveat below) |
 
 **ACRIS is joined natively:** the pipeline automatically joins Master
-(amounts/dates) with Legals (`8h5j-fqxa`, addresses) and Parties
-(`636b-3b5g`, names) by `document_id`, producing complete records from the
-free city APIs — no field map needed for deeds/loans/satisfactions, whose
-document types default to `DEED` / `MTGE`+`AGMT` / `SAT`. Lenders are
-auto-classified bank vs private by name, and all-cash purchases are
-detected by reconciling deeds against mortgage recordings on the same
-parcel.
+(amounts/dates) with Legals (`8h5j-fqxa`, addresses + borough/block/lot),
+Parties (`636b-3b5g`, names) and — for satisfactions — References
+(`pwkr-dpni`, document-to-document cross refs) by `document_id`, producing
+complete records from the free city APIs. No field map is needed for
+deeds/loans/satisfactions, whose document types default to `DEED` /
+`MTGE`+`AGMT` / `SAT`. Lenders are auto-classified bank vs private by name,
+and all-cash purchases are detected by reconciling deeds against mortgage
+recordings on the same parcel.
+
+Three details worth knowing, because they decide how much the feeds can
+actually see:
+
+- **Parcels are keyed by BBL.** Every joined record carries the borough-
+  block-lot key from Legals as its APN, so a deed, a mortgage, a lien and a
+  permit on one parcel converge on a single property row instead of
+  fragmenting on address spelling ("123 MAIN STREET" vs "123 Main St"). This
+  is what makes cash-purchase detection, borrower resumes, and the maturity
+  feed line up. A document covering several parcels (blanket mortgage,
+  assemblage) is bound to its primary parcel — easement and air-rights rows
+  are never chosen over a real taxable lot.
+- **Satisfactions match their mortgage by reference, not by name.** The
+  References dataset resolves which document a `SAT` discharges (by document
+  id, or by CRFN), so a payoff closes the right loan. Only when ACRIS
+  publishes no reference does it fall back to the lender+borrower name
+  match.
+- **Windows are read in pages under a row budget.** Master is ~17M rows and
+  a citywide month runs to five figures, so each pull reads up to
+  `pageBudget` × 500 documents (default 3 pages = 1,500) newest-first. When
+  a window holds more than that, the pull *says so* rather than reporting a
+  clean success, and the historical backfill resumes from the oldest record
+  it reached instead of stepping over the remainder — a bounded budget slows
+  the crawl down, it does not punch holes in it. Raise a source's
+  `pageBudget` in its field map to read more per pull; see the subrequest
+  note under **Schedule** before going much higher.
 
 **Mechanic's liens, lis pendens, and tax liens are recorded ACRIS document
 types too** — not scrapes. Their `doc_type` filters are never guessed:
@@ -246,8 +273,11 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
   boundaries in code. A sweep only *seeds* a pull queue; the
   10-minute background tick drains a couple of connectors per invocation.
   (Workers cap upstream fetches per invocation — 50 on the Free plan, and
-  one ACRIS join costs ~9 — so running everything in one invocation would
-  silently fail partway. Spreading pulls across ticks keeps every connector
+  one ACRIS join costs ~23 at the default 3-page budget — so running
+  everything in one invocation would silently fail partway. Raising a
+  connector's `pageBudget` raises that cost roughly linearly, so on the Free
+  plan keep it at or below 5; the Paid plan's 1,000-subrequest ceiling
+  leaves far more room. Spreading pulls across ticks keeps every connector
   inside the budget no matter how many are enabled.) Scoring, custom
   signals, entity resolution, and the digest run when the queue drains.
 - **Historical backfill** — Settings → Historical backfill, or automatic:
@@ -313,5 +343,7 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Records missing that you expected | Check Settings → Data quality — they may be quarantined (outside markets, failed a sanity gate, or failed grounding) |
 | Nothing populates at all, connectors look configured | Connectors are **disabled by default** — use **Activate all free sources** (Settings → Data sources), which enables, maps, backfills, and queues everything in one click |
 | A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
+| Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `pageBudget` and re-run the backfill to recover the day |
+| ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `pageBudget` to trade subrequests for speed |
 | ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
 | Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |

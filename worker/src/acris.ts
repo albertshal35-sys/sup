@@ -1,19 +1,30 @@
 /**
- * ACRIS native join — NYC splits recorded documents across three Socrata
+ * ACRIS native join — NYC splits recorded documents across four Socrata
  * datasets keyed by document_id:
  *
- *   Master  bnx9-e6tj  doc type, amount, dates
- *   Legals  8h5j-fqxa  borough/block/lot + street address
- *   Parties 636b-3b5g  party names (1 = grantor/mortgagor, 2 = grantee/mortgagee)
+ *   Master      bnx9-e6tj  doc type, amount, dates
+ *   Legals      8h5j-fqxa  borough/block/lot (BBL) + street address
+ *   Parties     636b-3b5g  party names (1 = grantor/mortgagor, 2 = grantee/mortgagee)
+ *   References  pwkr-dpni  document -> document cross-refs (satisfaction -> mortgage)
  *
  * This adapter pulls a date window from Master (filtered to the connector's
- * document types), then batch-fetches the matching Legals and Parties rows
- * and joins them in memory into complete deed/loan/satisfaction records —
- * so the free city APIs can feed the Maturity Sniffer and Cash-Poor feeds
- * with full records instead of quarantining half-records.
+ * document types), then batch-fetches the matching companion rows and joins
+ * them in memory into complete deed/loan/satisfaction records — so the free
+ * city APIs can feed the Maturity Sniffer and Cash-Poor feeds with full
+ * records instead of quarantining half-records.
  *
- * Request budget (free-tier friendly): Master limit 150/pull, id batches of
- * 40 → ≤ 9 subrequests per connector per run.
+ * Volume: Master is ~17M rows and a citywide month runs to five figures, so
+ * a window is read as *pages* under an explicit row budget rather than a
+ * single capped request. When a window saturates the budget the pull says
+ * so (`truncated`) and reports the oldest record it reached, which lets the
+ * backfill resume exactly there instead of stepping over the remainder —
+ * coverage converges to complete at whatever rate the budget allows.
+ *
+ * Request budget: pages are `MASTER_PAGE` rows, companion lookups batch
+ * `ID_BATCH` document_ids each, and only the companion datasets a given
+ * connector actually needs are fetched. At the default budget that is
+ * ~23 subrequests per connector per run, inside the Workers per-invocation
+ * subrequest cap with headroom.
  */
 
 import type { Env } from "./index";
@@ -22,7 +33,16 @@ import type { ConnectorCfg } from "./ingest";
 const MASTER_ID = "bnx9-e6tj";
 const LEGALS_ID = "8h5j-fqxa";
 const PARTIES_ID = "636b-3b5g";
+const REFS_ID = "pwkr-dpni";   // Real Property References — doc-to-doc cross refs
 const DOC_CODES_ID = "7isb-wh4c"; // Document Control Codes — doc_type -> human label
+
+/** Master rows per page. */
+const MASTER_PAGE = 500;
+/** Default pages per window. Override per connector via field-map `pageBudget`. */
+const DEFAULT_PAGE_BUDGET = 3;
+const MAX_PAGE_BUDGET = 20;
+/** document_ids per companion-dataset request (keeps the SoQL URL well under 8KB). */
+const ID_BATCH = 150;
 
 const BOROUGH: Record<string, { city: string; county: string }> = {
   "1": { city: "Manhattan", county: "New York" },
@@ -71,6 +91,17 @@ export function acrisCapable(connectorId: string): boolean {
   return connectorId in DOC_FILTERS || LIEN_FAMILY.has(connectorId);
 }
 
+/** Satisfactions carry no address; every other family is parcel-bound. */
+function needsLegals(connectorId: string): boolean {
+  return connectorId !== "satisfactions";
+}
+
+export function acrisPageBudget(cfg: ConnectorCfg): number {
+  const raw = Number(cfg.fieldMap?.pageBudget);
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_PAGE_BUDGET;
+  return Math.min(MAX_PAGE_BUDGET, Math.floor(raw));
+}
+
 /**
  * Resolve a lien-family connector's `doc_type` filter by matching document
  * descriptions in the Document Control Codes dataset, then persist it to
@@ -83,20 +114,14 @@ export async function resolveAcrisDocTypes(env: Env, cfg: ConnectorCfg): Promise
   if (!pattern || !cfg.baseUrl) return null;
   const base = resourceBase(cfg.baseUrl, DOC_CODES_ID);
   const { rows } = await fetchJson<Record<string, string>>(`${base}?$limit=500`, cfg.apiKey);
-  if (rows.length === 0) return null;
-
-  // Column names in the lookup dataset are quirky (e.g. doc__type), so
-  // detect them from the payload instead of hardcoding.
-  const keys = Object.keys(rows[0]);
-  const codeKey = keys.find((k) => /doc/i.test(k) && /type/i.test(k) && !/desc/i.test(k));
-  const descKey = keys.find((k) => /desc/i.test(k));
-  if (!codeKey || !descKey) return null;
+  const cols = docCodeColumns(rows);
+  if (!cols) return null;
 
   const codes = [
     ...new Set(
       rows
-        .filter((r) => pattern.test(String(r[descKey] ?? "")))
-        .map((r) => String(r[codeKey] ?? "").trim().replace(/'/g, ""))
+        .filter((r) => pattern.test(String(r[cols.desc] ?? "")))
+        .map((r) => String(r[cols.code] ?? "").trim().replace(/'/g, ""))
         .filter(Boolean)
     ),
   ].slice(0, 6);
@@ -113,8 +138,24 @@ export async function resolveAcrisDocTypes(env: Env, cfg: ConnectorCfg): Promise
   return where;
 }
 
+/**
+ * The Document Control Codes dataset names its columns `doc__type` and
+ * `doc__type_description` (two underscores) — not the `doc_type` used by
+ * every other ACRIS dataset. Detect them from the payload rather than
+ * hardcoding either spelling, so a rename upstream degrades to "no
+ * labels" instead of a 400.
+ */
+function docCodeColumns(rows: Record<string, unknown>[]): { code: string; desc: string } | null {
+  if (rows.length === 0) return null;
+  const keys = Object.keys(rows[0]);
+  const desc = keys.find((k) => /doc_*type/i.test(k) && /desc/i.test(k));
+  const code = keys.find((k) => /doc_*type/i.test(k) && !/desc/i.test(k) && !/class/i.test(k));
+  return code && desc ? { code, desc } : null;
+}
+
 interface MasterRow {
   document_id: string;
+  crfn?: string;
   doc_type?: string;
   document_amt?: string;
   document_date?: string;
@@ -123,6 +164,11 @@ interface MasterRow {
 interface LegalRow {
   document_id: string;
   borough?: string;
+  block?: string;
+  lot?: string;
+  easement?: string;
+  air_rights?: string;
+  property_type?: string;
   street_number?: string;
   street_name?: string;
   unit?: string;
@@ -131,6 +177,11 @@ interface PartyRow {
   document_id: string;
   party_type?: string;
   name?: string;
+}
+interface RefRow {
+  document_id: string;
+  reference_by_doc_id?: string;
+  reference_by_crfn_?: string;
 }
 
 const BANKISH =
@@ -160,17 +211,95 @@ async function fetchByDocIds<T>(
   select: string
 ): Promise<T[]> {
   const out: T[] = [];
-  for (let i = 0; i < ids.length; i += 40) {
-    const batch = ids.slice(i, i + 40).map((id) => `'${id.replace(/'/g, "")}'`);
+  for (let i = 0; i < ids.length; i += ID_BATCH) {
+    const batch = ids.slice(i, i + ID_BATCH).map((id) => `'${id.replace(/'/g, "")}'`);
     const params = new URLSearchParams({
       $where: `document_id in(${batch.join(",")})`,
       $select: select,
-      $limit: "2000",
+      $limit: "10000",
     });
     const { rows } = await fetchJson<T>(`${base}?${params}`, token);
     out.push(...rows);
   }
   return out;
+}
+
+/**
+ * Page a Master date window newest-first under the connector's row budget.
+ * Newest-first matters: it makes a saturated window resumable from its
+ * oldest record, so nothing between that point and the window's start is
+ * silently stepped over.
+ */
+async function fetchMasterWindow(
+  cfg: ConnectorCfg,
+  filter: string,
+  window: { from: string; to: string }
+): Promise<{ raw: string; master: MasterRow[]; truncated: boolean }> {
+  const budget = acrisPageBudget(cfg);
+  const master: MasterRow[] = [];
+  // Every page feeds the checksum: keying it on page 1 alone would report
+  // "unchanged" for a window whose later pages moved.
+  const pages: string[] = [];
+
+  for (let page = 0; page < budget; page++) {
+    const params = new URLSearchParams({
+      $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}' AND (${filter})`,
+      // document_id breaks ties so $offset paging is stable across requests.
+      $order: "recorded_datetime DESC, document_id DESC",
+      $limit: String(MASTER_PAGE),
+      $offset: String(page * MASTER_PAGE),
+      $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime",
+    });
+    const { raw, rows } = await fetchJson<MasterRow>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
+    pages.push(raw);
+    master.push(...rows);
+    if (rows.length < MASTER_PAGE) return { raw: pages.join(""), master, truncated: false };
+  }
+  // Every page came back full. There may or may not be more behind the
+  // budget; "truncated" is the conservative answer, and its only cost is
+  // that the backfill re-reads one already-ingested day.
+  return { raw: pages.join(""), master, truncated: true };
+}
+
+/** Prefer a real taxable parcel over easement / air-rights rows on the same doc. */
+function pickPrimaryLegal(rows: LegalRow[]): LegalRow {
+  const scored = [...rows].sort((a, b) => {
+    const flag = (r: LegalRow) =>
+      (String(r.easement ?? "").toUpperCase() === "Y" ? 2 : 0) +
+      (String(r.air_rights ?? "").toUpperCase() === "Y" ? 1 : 0);
+    if (flag(a) !== flag(b)) return flag(a) - flag(b);
+    const num = (v?: string) => Number(v ?? 0) || 0;
+    return num(a.block) - num(b.block) || num(a.lot) - num(b.lot);
+  });
+  return scored[0];
+}
+
+/** NYC's canonical parcel key: borough(1) + block(5) + lot(4), zero-padded. */
+function toBbl(legal: LegalRow | undefined): string | null {
+  if (!legal) return null;
+  const boro = String(legal.borough ?? "").trim();
+  const block = Number(legal.block ?? 0);
+  const lot = Number(legal.lot ?? 0);
+  if (!BOROUGH[boro] || !block || !lot) return null;
+  return `${boro}${String(block).padStart(5, "0")}${String(lot).padStart(4, "0")}`;
+}
+
+/** Primary name plus any co-parties, so co-borrowers aren't dropped. */
+function joinNames(names: string[]): string {
+  const seen = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  if (seen.length === 0) return "";
+  // Keep the field inside the 200-char plausibility gate in integrity.ts.
+  const joined = seen.slice(0, 4).join(" & ");
+  return joined.length > 200 ? seen[0].slice(0, 200) : joined;
+}
+
+export interface AcrisPull {
+  raw: string;
+  rows: Record<string, unknown>[];
+  /** The window held more documents than the row budget allowed. */
+  truncated: boolean;
+  /** Oldest `recorded_datetime` date reached (YYYY-MM-DD), for resumption. */
+  oldestRecorded: string | null;
 }
 
 /**
@@ -181,7 +310,7 @@ export async function acrisFetch(
   env: Env,
   cfg: ConnectorCfg,
   window: { from: string; to: string }
-): Promise<{ raw: string; rows: Record<string, unknown>[] }> {
+): Promise<AcrisPull> {
   let filter = cfg.fieldMap?.where?.replace(/;/g, "").trim() || DOC_FILTERS[cfg.id] || null;
   if (!filter) filter = await resolveAcrisDocTypes(env, cfg);
   if (!filter || !cfg.baseUrl) {
@@ -190,41 +319,68 @@ export async function acrisFetch(
     );
   }
 
-  const masterParams = new URLSearchParams({
-    $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}' AND (${filter})`,
-    $order: "recorded_datetime DESC",
-    $limit: "150",
-    $select: "document_id,doc_type,document_amt,document_date,recorded_datetime",
-  });
-  const { raw, rows: master } = await fetchJson<MasterRow>(`${cfg.baseUrl}?${masterParams}`, cfg.apiKey);
-  if (master.length === 0) return { raw, rows: [] };
+  const { raw, master, truncated } = await fetchMasterWindow(cfg, filter, window);
+  if (master.length === 0) return { raw, rows: [], truncated: false, oldestRecorded: null };
+
+  const oldestRecorded =
+    master
+      .map((m) => (m.recorded_datetime ?? "").slice(0, 10))
+      .filter(Boolean)
+      .sort()[0] ?? null;
 
   const ids = [...new Set(master.map((m) => m.document_id).filter(Boolean))];
-  const [legals, parties] = await Promise.all([
-    fetchByDocIds<LegalRow>(
-      resourceBase(cfg.baseUrl, LEGALS_ID), ids, cfg.apiKey,
-      "document_id,borough,street_number,street_name,unit"
-    ),
+  const wantLegals = needsLegals(cfg.id);
+  const wantRefs = cfg.id === "satisfactions";
+
+  const [legals, parties, refs] = await Promise.all([
+    wantLegals
+      ? fetchByDocIds<LegalRow>(
+          resourceBase(cfg.baseUrl, LEGALS_ID), ids, cfg.apiKey,
+          "document_id,borough,block,lot,easement,air_rights,property_type,street_number,street_name,unit"
+        )
+      : Promise.resolve([] as LegalRow[]),
     fetchByDocIds<PartyRow>(
       resourceBase(cfg.baseUrl, PARTIES_ID), ids, cfg.apiKey,
       "document_id,party_type,name"
     ),
+    wantRefs
+      ? fetchByDocIds<RefRow>(
+          resourceBase(cfg.baseUrl, REFS_ID), ids, cfg.apiKey,
+          "document_id,reference_by_doc_id,reference_by_crfn_"
+        ).catch(() => [] as RefRow[]) // refs are an enrichment, never a hard failure
+      : Promise.resolve([] as RefRow[]),
   ]);
 
-  const legalByDoc = new Map<string, LegalRow>();
-  for (const l of legals) if (!legalByDoc.has(l.document_id)) legalByDoc.set(l.document_id, l);
-  const partiesByDoc = new Map<string, { p1: string | null; p2: string | null }>();
+  // A document can cover several parcels (blanket mortgages, assemblages).
+  // doc_number is the idempotency key, so the record stays one row bound to
+  // the primary parcel; the parcel count rides along as a portfolio signal.
+  const legalsByDoc = new Map<string, LegalRow[]>();
+  for (const l of legals) {
+    const list = legalsByDoc.get(l.document_id) ?? [];
+    list.push(l);
+    legalsByDoc.set(l.document_id, list);
+  }
+  const partiesByDoc = new Map<string, { p1: string[]; p2: string[] }>();
   for (const p of parties) {
-    const slot = partiesByDoc.get(p.document_id) ?? { p1: null, p2: null };
-    if (p.party_type === "1" && !slot.p1) slot.p1 = p.name ?? null;
-    if (p.party_type === "2" && !slot.p2) slot.p2 = p.name ?? null;
+    const slot = partiesByDoc.get(p.document_id) ?? { p1: [], p2: [] };
+    if (p.party_type === "1" && p.name) slot.p1.push(p.name);
+    if (p.party_type === "2" && p.name) slot.p2.push(p.name);
     partiesByDoc.set(p.document_id, slot);
   }
+  const refsByDoc = new Map<string, RefRow>();
+  for (const r of refs) if (!refsByDoc.has(r.document_id)) refsByDoc.set(r.document_id, r);
+
+  // Satisfactions reference their mortgage by CRFN as often as by doc id;
+  // map CRFNs we saw in this window back onto document ids so the loan
+  // match is exact instead of a lender+borrower name guess.
+  const docIdByCrfn = new Map<string, string>();
+  for (const m of master) if (m.crfn) docIdByCrfn.set(m.crfn, m.document_id);
 
   const rows: Record<string, unknown>[] = [];
   for (const m of master) {
-    const legal = legalByDoc.get(m.document_id);
-    const party = partiesByDoc.get(m.document_id) ?? { p1: null, p2: null };
+    const parcels = legalsByDoc.get(m.document_id) ?? [];
+    const legal = parcels.length > 0 ? pickPrimaryLegal(parcels) : undefined;
+    const party = partiesByDoc.get(m.document_id) ?? { p1: [], p2: [] };
     const b = legal?.borough ? BOROUGH[legal.borough] : undefined;
     const address = legal
       ? [legal.street_number, legal.street_name, legal.unit].filter(Boolean).join(" ").trim()
@@ -233,11 +389,17 @@ export async function acrisFetch(
     const amount = Number(m.document_amt ?? 0);
     const common = {
       docNumber: m.document_id,
+      // BBL is NYC's canonical parcel key — with it, every document on a
+      // parcel converges on one property row regardless of how the street
+      // address was typed on any single recording.
+      apn: toBbl(legal),
       address,
       city: b?.city ?? "",
       county: b?.county ?? "",
       state: "NY",
       sourceDocType: m.doc_type ?? null,
+      parcelCount: parcels.length || null,
+      propertyClass: legal?.property_type ?? null,
     };
 
     if (cfg.id === "county_deeds") {
@@ -248,12 +410,12 @@ export async function acrisFetch(
         // mortgage lands on the same parcel within the following weeks.
         isCash: true,
         deedType: null,
-        buyerName: party.p2 ?? "",   // grantee
-        sellerName: party.p1 ?? "",  // grantor
+        buyerName: joinNames(party.p2),   // grantee
+        sellerName: joinNames(party.p1),  // grantor
         recordedAt: date,
       });
     } else if (cfg.id === "county_loans") {
-      const lender = party.p2 ?? ""; // mortgagee
+      const lender = joinNames(party.p2); // mortgagee
       rows.push({
         ...common,
         lenderName: lender,
@@ -263,14 +425,19 @@ export async function acrisFetch(
         originatedAt: date,
         termMonths: null,
         maturityDate: null,
-        borrowerName: party.p1 ?? "", // mortgagor
+        borrowerName: joinNames(party.p1), // mortgagor
       });
     } else if (cfg.id === "satisfactions") {
+      const ref = refsByDoc.get(m.document_id);
+      const referenced =
+        ref?.reference_by_doc_id?.trim() ||
+        (ref?.reference_by_crfn_ ? docIdByCrfn.get(ref.reference_by_crfn_.trim()) : null) ||
+        null;
       rows.push({
         docNumber: m.document_id,
-        originalDocNumber: null,     // XREF dataset lookup is a future add
-        lenderName: party.p2 ?? party.p1 ?? "",
-        borrowerName: party.p1 ?? "",
+        originalDocNumber: referenced,
+        lenderName: joinNames(party.p2) || joinNames(party.p1),
+        borrowerName: joinNames(party.p1),
         satisfiedAt: date,
       });
     } else if (LIEN_FAMILY.has(cfg.id)) {
@@ -280,14 +447,14 @@ export async function acrisFetch(
       // until confirmed per doc class via Discover ACRIS doc types.
       rows.push({
         ...common,
-        claimant: party.p2 ?? "",
-        ownerName: party.p1 ?? "",
+        claimant: joinNames(party.p2),
+        ownerName: joinNames(party.p1),
         amount,
         filedAt: date,
       });
     }
   }
-  return { raw, rows };
+  return { raw, rows, truncated, oldestRecorded };
 }
 
 /**
@@ -313,19 +480,19 @@ export async function discoverDocTypes(
   const { rows } = await fetchJson<{ doc_type: string; n: string }>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
   if (rows.length === 0) return [];
 
-  const codes = rows.map((r) => `'${r.doc_type.replace(/'/g, "")}'`).join(",");
   const codesBase = resourceBase(cfg.baseUrl, DOC_CODES_ID);
-  const codeParams = new URLSearchParams({
-    $where: `doc_type in(${codes})`,
-    $select: "doc_type, doc_type_description",
-    $limit: "60",
-  });
   let labels = new Map<string, string>();
   try {
-    const { rows: codeRows } = await fetchJson<{ doc_type: string; doc_type_description?: string }>(
-      `${codesBase}?${codeParams}`, cfg.apiKey
-    );
-    labels = new Map(codeRows.map((c) => [c.doc_type, c.doc_type_description ?? ""]));
+    // The lookup table is small (a few hundred rows) and its column names
+    // don't match the Master dataset's, so pull it whole and match in
+    // memory rather than filtering server-side on a guessed column name.
+    const { rows: codeRows } = await fetchJson<Record<string, string>>(`${codesBase}?$limit=500`, cfg.apiKey);
+    const cols = docCodeColumns(codeRows);
+    if (cols) {
+      labels = new Map(
+        codeRows.map((c) => [String(c[cols.code] ?? "").trim(), String(c[cols.desc] ?? "").trim()])
+      );
+    }
   } catch {
     // Lookup dataset is best-effort — the codes + counts alone are still useful.
   }

@@ -21,7 +21,7 @@ need capital.
 - **Single Worker deploy** — one Cloudflare Worker serves the built React frontend as static assets **and** the `/api/*` edge API. One URL, one `npm run deploy`.
 - **Frontend** — React 18 + TypeScript + Tailwind (dual-theme design system, bento grid, custom component kit, Zustand state, ⌘K palette, drag-and-drop pipeline).
 - **Database** — **Cloudflare D1**; schema managed by migrations in `worker/migrations/` (applied automatically on merge by `.github/workflows/deploy.yml`). Materialized `triggers` table for O(1) feed reads; `principals`/`entity_principals` model the cross-LLC borrower graph.
-- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. Connectors are configured from the in-app admin settings (enable, vendor URL, AES-GCM-encrypted API key), retried 3× with backoff, audited in `ingestion_runs`, and idempotent on re-run.
+- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. NYC ACRIS (~17M recorded documents) is joined natively across Master/Legals/Parties/References, parcel-keyed by BBL, and read in paged windows under an explicit row budget — a window that outgrows the budget is reported, and the backfill resumes exactly where it stopped rather than skipping ahead. Connectors are configured from the in-app admin settings (enable, vendor URL, AES-GCM-encrypted API key), retried 3× with backoff, audited in `ingestion_runs`, and idempotent on re-run.
 - **Data modes** — `demo` (seeded sample data, default) vs `live` (only ingested records). Toggle in Settings; purge sample rows once live.
 
 ## Develop

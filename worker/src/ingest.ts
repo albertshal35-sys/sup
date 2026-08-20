@@ -47,6 +47,10 @@ interface ConnectorResult {
   ingested: number;
   skipped: number;
   checksum: string | null;
+  /** The source held more rows in this window than the pull budget allowed. */
+  truncated?: boolean;
+  /** Oldest date actually reached (YYYY-MM-DD) — where a truncated window resumes. */
+  resumeCursor?: string | null;
 }
 
 export interface ConnectorCfg {
@@ -57,7 +61,13 @@ export interface ConnectorCfg {
   scrapeUrl: string | null;
   notes: string | null;
   apiKey: string | null;
-  fieldMap: { dateField?: string; where?: string; map?: Record<string, string> } | null;
+  fieldMap: {
+    dateField?: string;
+    where?: string;
+    map?: Record<string, string>;
+    /** ACRIS only: Master pages to read per window (row budget). */
+    pageBudget?: number;
+  } | null;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -247,11 +257,25 @@ async function resolveProperty(env: Env, rec: AddressRec): Promise<string> {
     if (byApn) return byApn.id;
   }
   const byAddr = await env.DB.prepare(
-    "SELECT id FROM properties WHERE address = ?1 AND city = ?2 AND state = ?3"
+    "SELECT id, apn FROM properties WHERE address = ?1 AND city = ?2 AND state = ?3"
   )
     .bind(rec.address, rec.city, rec.state)
-    .first<{ id: string }>();
-  if (byAddr) return byAddr.id;
+    .first<{ id: string; apn: string | null }>();
+  if (byAddr) {
+    // Rows first seen through an address-only source (or before this
+    // connector learned to carry a parcel key) get their APN filled in the
+    // moment one arrives, so later documents can match on the key instead
+    // of on exact address spelling. Guarded: never overwrite a different
+    // APN, and ignore the collision if that parcel already has a row.
+    if (rec.apn && !byAddr.apn) {
+      await env.DB.prepare(
+        "UPDATE OR IGNORE properties SET apn = ?1 WHERE id = ?2 AND apn IS NULL"
+      )
+        .bind(rec.apn, byAddr.id)
+        .run();
+    }
+    return byAddr.id;
+  }
 
   const id = `prp_${crypto.randomUUID().slice(0, 12)}`;
   await env.DB.prepare(
@@ -513,6 +537,8 @@ export async function acquireAndIngest(
   let confidence: Provenance["confidence"];
   let sourceUrl: string | null;
   let groundingQuarantined = 0;
+  let truncated = false;
+  let resumeCursor: string | null = null;
 
   if (cfg.mode === "scrape") {
     if (!cfg.scrapeUrl) throw new Error("scrape_url_missing");
@@ -561,6 +587,8 @@ export async function acquireAndIngest(
       const result = await acrisFetch(env, cfg, w);
       raw = result.raw;
       rows = result.rows;
+      truncated = result.truncated;
+      resumeCursor = result.oldestRecorded;
     } else if (isSocrataUrl(cfg.baseUrl)) {
       const result = await socrataFetch(cfg, w);
       raw = result.raw;
@@ -575,7 +603,13 @@ export async function acquireAndIngest(
   const prov: Provenance = { sourceId: cfg.id, sourceUrl, method, confidence };
   const { ingested, skipped } = await def.upsert(env, valid as never[], prov);
   await recordSourceStats(env, cfg.id, ingested, quarantined + groundingQuarantined);
-  return { ingested, skipped: skipped + quarantined + groundingQuarantined, checksum: await sha256Hex(raw) };
+  return {
+    ingested,
+    skipped: skipped + quarantined + groundingQuarantined,
+    checksum: await sha256Hex(raw),
+    truncated,
+    resumeCursor,
+  };
 }
 
 /**
