@@ -35,7 +35,7 @@ import { decryptSecret } from "./crypto";
 import { rescoreTriggers } from "./scoring";
 import { extractRecords, renderPageMarkdown, verifyGrounding } from "./ai";
 import { maybeSendDigest } from "./alerts";
-import { gateRecords, recordSourceStats, corroborate, type Provenance } from "./integrity";
+import { gateRecords, recordSourceStats, corroborateStmt, type Provenance } from "./integrity";
 import { acrisCapable, acrisFetch, isAcrisMaster } from "./acris";
 import { evaluateCustomSignals } from "./signals";
 import { generateMergeSuggestions } from "./resolution";
@@ -65,8 +65,8 @@ export interface ConnectorCfg {
     dateField?: string;
     where?: string;
     map?: Record<string, string>;
-    /** ACRIS only: Master pages to read per window (row budget). */
-    pageBudget?: number;
+    /** ACRIS only: documents to read per window in one run. */
+    docBudget?: number;
   } | null;
 }
 
@@ -287,6 +287,197 @@ async function resolveProperty(env: Env, rec: AddressRec): Promise<string> {
   return id;
 }
 
+/* --------------------- bulk resolution + batched writes --------------------- */
+
+/**
+ * Ingesting a page of records the naive way costs ~4 sequential D1 round
+ * trips per row (property lookup, property insert, entity lookup, entity
+ * insert) before the record itself is written. At ACRIS scale that, not the
+ * HTTP fetch, is what caps how much of a window one invocation can absorb.
+ *
+ * The resolver below pre-resolves every property and entity a page needs in
+ * a handful of round trips — grouped `IN (...)` reads, then one batched
+ * write for whatever was missing — so the per-row cost collapses to a single
+ * batched insert. That is what makes a large `$limit` worth asking for.
+ */
+
+/** Keep `IN (...)` lists and batches inside D1's bind/statement limits. */
+const IN_CHUNK = 90;
+const STMT_BATCH = 100;
+
+function chunked<T>(xs: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
+
+/** Run statements in batched round trips; returns each statement's row count. */
+async function runBatched(env: Env, stmts: D1PreparedStatement[]): Promise<number[]> {
+  const changes: number[] = [];
+  for (const group of chunked(stmts, STMT_BATCH)) {
+    const results = await env.DB.batch(group);
+    for (const r of results) changes.push(r.meta?.changes ?? 0);
+  }
+  return changes;
+}
+
+const placeholders = (n: number) => Array.from({ length: n }, (_, i) => `?${i + 1}`).join(",");
+
+/** A parcel is identified by its APN when it has one, else by its address. */
+function propKey(rec: AddressRec): string {
+  return rec.apn
+    ? `a|${rec.apn}|${rec.county}|${rec.state}`
+    : `s|${rec.address}|${rec.city}|${rec.state}`;
+}
+
+class BulkResolver {
+  private props = new Map<string, string>();
+  private ents = new Map<string, string>();
+
+  constructor(private env: Env) {}
+
+  /** Resolve everything this page needs. Safe to call once per page. */
+  async warm(records: AddressRec[], names: (string | null | undefined)[]): Promise<void> {
+    await this.warmProperties(records);
+    await this.warmEntities(names);
+  }
+
+  property(rec: AddressRec): string | null {
+    return this.props.get(propKey(rec)) ?? null;
+  }
+
+  entity(rawName: string | null | undefined): string | null {
+    const name = normalizeName(rawName ?? "");
+    return name ? this.ents.get(name) ?? null : null;
+  }
+
+  private async warmProperties(records: AddressRec[]): Promise<void> {
+    const unique = new Map<string, AddressRec>();
+    for (const r of records) if (r?.address) unique.set(propKey(r), r);
+    if (unique.size === 0) return;
+    const recs = [...unique.values()];
+
+    const apns = [...new Set(recs.map((r) => r.apn).filter(Boolean))] as string[];
+    const addrs = [...new Set(recs.map((r) => r.address))];
+
+    const byApn = new Map<string, string>();
+    for (const c of chunked(apns, IN_CHUNK)) {
+      const res = await this.env.DB.prepare(
+        `SELECT id, apn, county, state FROM properties WHERE apn IN (${placeholders(c.length)})`
+      )
+        .bind(...c)
+        .all<{ id: string; apn: string; county: string; state: string }>();
+      for (const row of res.results) byApn.set(`${row.apn}|${row.county}|${row.state}`, row.id);
+    }
+
+    const byAddr = new Map<string, { id: string; apn: string | null }>();
+    for (const c of chunked(addrs, IN_CHUNK)) {
+      const res = await this.env.DB.prepare(
+        `SELECT id, apn, address, city, state FROM properties WHERE address IN (${placeholders(c.length)})`
+      )
+        .bind(...c)
+        .all<{ id: string; apn: string | null; address: string; city: string; state: string }>();
+      for (const row of res.results) {
+        const k = `${row.address}|${row.city}|${row.state}`;
+        if (!byAddr.has(k)) byAddr.set(k, { id: row.id, apn: row.apn });
+      }
+    }
+
+    const inserts: D1PreparedStatement[] = [];
+    const backfills: D1PreparedStatement[] = [];
+    const createdApnKeys: { apn: string; county: string; state: string; key: string }[] = [];
+
+    for (const [key, rec] of unique) {
+      const apnHit = rec.apn ? byApn.get(`${rec.apn}|${rec.county}|${rec.state}`) : undefined;
+      if (apnHit) {
+        this.props.set(key, apnHit);
+        continue;
+      }
+      const addrKey = `${rec.address}|${rec.city}|${rec.state}`;
+      const addrHit = byAddr.get(addrKey);
+      if (addrHit) {
+        this.props.set(key, addrHit.id);
+        // Same APN backfill the per-row path does: a property first seen
+        // through an address-only source gets its parcel key the moment a
+        // document supplies one.
+        if (rec.apn && !addrHit.apn) {
+          backfills.push(
+            this.env.DB.prepare(
+              "UPDATE OR IGNORE properties SET apn = ?1 WHERE id = ?2 AND apn IS NULL"
+            ).bind(rec.apn, addrHit.id)
+          );
+          addrHit.apn = rec.apn; // don't queue the same backfill twice
+        }
+        continue;
+      }
+
+      const id = `prp_${crypto.randomUUID().slice(0, 12)}`;
+      this.props.set(key, id);
+      byAddr.set(addrKey, { id, apn: rec.apn ?? null });
+      if (rec.apn) {
+        byApn.set(`${rec.apn}|${rec.county}|${rec.state}`, id);
+        createdApnKeys.push({ apn: rec.apn, county: rec.county, state: rec.state, key });
+      }
+      inserts.push(
+        this.env.DB.prepare(
+          `INSERT OR IGNORE INTO properties (id, apn, address, city, county, state, zip, origin)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'live')`
+        ).bind(id, rec.apn ?? null, rec.address, rec.city, rec.county, rec.state, rec.zip ?? null)
+      );
+    }
+
+    await runBatched(this.env, inserts);
+    await runBatched(this.env, backfills);
+
+    // `properties` is UNIQUE (apn, county, state). If a concurrent
+    // invocation created one of these parcels between our read and our
+    // write, OR IGNORE dropped our insert and the id we handed out points
+    // at nothing. Re-read the parcels we believe we just created and adopt
+    // whatever id actually won, so no record can reference a missing row.
+    if (createdApnKeys.length > 0) {
+      for (const c of chunked(createdApnKeys, IN_CHUNK)) {
+        const res = await this.env.DB.prepare(
+          `SELECT id, apn, county, state FROM properties WHERE apn IN (${placeholders(c.length)})`
+        )
+          .bind(...c.map((k) => k.apn))
+          .all<{ id: string; apn: string; county: string; state: string }>();
+        const actual = new Map(res.results.map((r) => [`${r.apn}|${r.county}|${r.state}`, r.id]));
+        for (const k of c) {
+          const winner = actual.get(`${k.apn}|${k.county}|${k.state}`);
+          if (winner) this.props.set(k.key, winner);
+        }
+      }
+    }
+  }
+
+  private async warmEntities(names: (string | null | undefined)[]): Promise<void> {
+    const unique = [...new Set(names.map((n) => normalizeName(n ?? "")).filter(Boolean))];
+    if (unique.length === 0) return;
+
+    for (const c of chunked(unique, IN_CHUNK)) {
+      const res = await this.env.DB.prepare(
+        `SELECT id, name FROM entities WHERE name IN (${placeholders(c.length)})`
+      )
+        .bind(...c)
+        .all<{ id: string; name: string }>();
+      for (const row of res.results) this.ents.set(row.name, row.id);
+    }
+
+    const inserts: D1PreparedStatement[] = [];
+    for (const name of unique) {
+      if (this.ents.has(name)) continue;
+      const id = `ent_${crypto.randomUUID().slice(0, 12)}`;
+      const kind = ENTITY_SUFFIX.test(name) ? (/TRUST/.test(name) ? "trust" : "llc") : "individual";
+      this.ents.set(name, id);
+      inserts.push(
+        this.env.DB.prepare("INSERT INTO entities (id, kind, name, origin) VALUES (?1, ?2, ?3, 'live')")
+          .bind(id, kind, name)
+      );
+    }
+    await runBatched(this.env, inserts);
+  }
+}
+
 /* ------------------------------ record upserts ------------------------------ */
 
 const PROV_COLS = ", source_id, source_url, source_method, confidence, ingested_at";
@@ -298,25 +489,36 @@ interface DeedRec extends AddressRec {
 }
 
 async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
-  let ingested = 0, skipped = 0;
-  for (const r of rows) {
-    if (!r?.docNumber || !r.address || !r.buyerName) { skipped++; continue; }
-    const propertyId = await resolveProperty(env, r);
-    const entityId = await resolveEntity(env, r.buyerName);
-    const res = await env.DB.prepare(
+  const usable = rows.filter((r) => r?.docNumber && r.address && r.buyerName);
+  let skipped = rows.length - usable.length;
+  if (usable.length === 0) return { ingested: 0, skipped };
+
+  const resolver = new BulkResolver(env);
+  await resolver.warm(usable, usable.map((r) => r.buyerName));
+
+  const ready = usable.filter((r) => resolver.property(r));
+  skipped += usable.length - ready.length;
+
+  const stmts = ready.map((r) =>
+    env.DB.prepare(
       `INSERT OR IGNORE INTO transactions
          (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name, recorded_at, doc_number, origin${PROV_COLS})
        VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13, ?14, datetime('now'))`
+    ).bind(
+      `trx_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.buyerName),
+      Math.round(r.price || 0), r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName,
+      r.recordedAt, r.docNumber, ...provBinds(prov)
     )
-      .bind(
-        `trx_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, Math.round(r.price || 0),
-        r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName, r.recordedAt, r.docNumber,
-        ...provBinds(prov)
-      )
-      .run();
-    if (res.meta.changes) ingested++;
-    else { skipped++; await corroborate(env, "transactions", r.docNumber, prov.method); }
+  );
+  const changes = await runBatched(env, stmts);
+
+  let ingested = 0;
+  const corroborations: D1PreparedStatement[] = [];
+  for (let i = 0; i < ready.length; i++) {
+    if (changes[i]) ingested++;
+    else { skipped++; corroborations.push(corroborateStmt(env, "transactions", ready[i].docNumber, prov.method)); }
   }
+  await runBatched(env, corroborations);
   return { ingested, skipped };
 }
 
@@ -327,28 +529,39 @@ interface LoanRec extends AddressRec {
 }
 
 async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
-  let ingested = 0, skipped = 0;
   const allowedTypes = new Set(["private", "hard_money", "bank", "credit_union", "seller"]);
-  for (const r of rows) {
-    if (!r?.docNumber || !r.address || !r.lenderName) { skipped++; continue; }
-    const propertyId = await resolveProperty(env, r);
-    const entityId = await resolveEntity(env, r.borrowerName);
-    const lenderType = allowedTypes.has(r.lenderType ?? "") ? r.lenderType! : "private";
-    const res = await env.DB.prepare(
+  const usable = rows.filter((r) => r?.docNumber && r.address && r.lenderName);
+  let skipped = rows.length - usable.length;
+  if (usable.length === 0) return { ingested: 0, skipped };
+
+  const resolver = new BulkResolver(env);
+  await resolver.warm(usable, usable.map((r) => r.borrowerName));
+
+  const ready = usable.filter((r) => resolver.property(r));
+  skipped += usable.length - ready.length;
+
+  const stmts = ready.map((r) =>
+    env.DB.prepare(
       `INSERT OR IGNORE INTO loans
          (id, property_id, entity_id, lender_name, lender_type, principal, rate_pct,
           originated_at, term_months, maturity_date, doc_number, origin${PROV_COLS})
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'live', ?12, ?13, ?14, ?15, datetime('now'))`
+    ).bind(
+      `lon_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.borrowerName),
+      r.lenderName, allowedTypes.has(r.lenderType ?? "") ? r.lenderType! : "private",
+      Math.round(r.principal || 0), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
+      r.maturityDate ?? null, r.docNumber, ...provBinds(prov)
     )
-      .bind(
-        `lon_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.lenderName, lenderType,
-        Math.round(r.principal || 0), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
-        r.maturityDate ?? null, r.docNumber, ...provBinds(prov)
-      )
-      .run();
-    if (res.meta.changes) ingested++;
-    else { skipped++; await corroborate(env, "loans", r.docNumber, prov.method); }
+  );
+  const changes = await runBatched(env, stmts);
+
+  let ingested = 0;
+  const corroborations: D1PreparedStatement[] = [];
+  for (let i = 0; i < ready.length; i++) {
+    if (changes[i]) ingested++;
+    else { skipped++; corroborations.push(corroborateStmt(env, "loans", ready[i].docNumber, prov.method)); }
   }
+  await runBatched(env, corroborations);
   return { ingested, skipped };
 }
 
@@ -358,27 +571,32 @@ interface PermitRec extends AddressRec {
 }
 
 async function upsertPermits(env: Env, rows: PermitRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
-  let ingested = 0, skipped = 0;
   const types = new Set(["ground_up", "structural", "addition", "demo", "remodel", "pool", "solar", "other"]);
-  for (const r of rows) {
-    if (!r?.permitNo || !r.address) { skipped++; continue; }
-    const propertyId = await resolveProperty(env, r);
-    const entityId = await resolveEntity(env, r.ownerName);
-    const res = await env.DB.prepare(
+  const usable = rows.filter((r) => r?.permitNo && r.address);
+  let skipped = rows.length - usable.length;
+  if (usable.length === 0) return { ingested: 0, skipped };
+
+  const resolver = new BulkResolver(env);
+  await resolver.warm(usable, usable.map((r) => r.ownerName));
+
+  const ready = usable.filter((r) => resolver.property(r));
+  skipped += usable.length - ready.length;
+
+  const stmts = ready.map((r) =>
+    env.DB.prepare(
       `INSERT OR IGNORE INTO permits
          (id, property_id, entity_id, permit_no, permit_type, description, valuation, filed_at, status, contractor, origin${PROV_COLS})
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13, ?14, datetime('now'))`
+    ).bind(
+      `pmt_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.ownerName),
+      r.permitNo, types.has(r.permitType) ? r.permitType : "other", r.description ?? null,
+      Math.round(r.valuation || 0), r.filedAt, r.status ?? "filed", r.contractor ?? null,
+      ...provBinds(prov)
     )
-      .bind(
-        `pmt_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId, r.permitNo,
-        types.has(r.permitType) ? r.permitType : "other", r.description ?? null,
-        Math.round(r.valuation || 0), r.filedAt, r.status ?? "filed", r.contractor ?? null,
-        ...provBinds(prov)
-      )
-      .run();
-    if (res.meta.changes) ingested++; else skipped++;
-  }
-  return { ingested, skipped };
+  );
+  const changes = await runBatched(env, stmts);
+  const ingested = changes.filter(Boolean).length;
+  return { ingested, skipped: skipped + (ready.length - ingested) };
 }
 
 interface LienRec extends AddressRec {
@@ -390,25 +608,36 @@ const LIEN_TYPES = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens"
 
 function makeLienUpserter(defaultType: string) {
   return async (env: Env, rows: LienRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> => {
-    let ingested = 0, skipped = 0;
-    for (const r of rows) {
-      if (!r?.docNumber || !r.address || !r.claimant) { skipped++; continue; }
-      const propertyId = await resolveProperty(env, r);
-      const entityId = await resolveEntity(env, r.ownerName);
-      const res = await env.DB.prepare(
+    const usable = rows.filter((r) => r?.docNumber && r.address && r.claimant);
+    let skipped = rows.length - usable.length;
+    if (usable.length === 0) return { ingested: 0, skipped };
+
+    const resolver = new BulkResolver(env);
+    await resolver.warm(usable, usable.map((r) => r.ownerName));
+
+    const ready = usable.filter((r) => resolver.property(r));
+    skipped += usable.length - ready.length;
+
+    const stmts = ready.map((r) =>
+      env.DB.prepare(
         `INSERT OR IGNORE INTO liens
            (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number, origin${PROV_COLS})
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'live', ?9, ?10, ?11, ?12, datetime('now'))`
+      ).bind(
+        `lin_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.ownerName),
+        LIEN_TYPES.has(r.lienType ?? "") ? r.lienType! : defaultType, r.claimant,
+        Math.round(r.amount || 0), r.filedAt, r.docNumber, ...provBinds(prov)
       )
-        .bind(
-          `lin_${crypto.randomUUID().slice(0, 12)}`, propertyId, entityId,
-          LIEN_TYPES.has(r.lienType ?? "") ? r.lienType! : defaultType, r.claimant,
-          Math.round(r.amount || 0), r.filedAt, r.docNumber, ...provBinds(prov)
-        )
-        .run();
-      if (res.meta.changes) ingested++;
-      else { skipped++; await corroborate(env, "liens", r.docNumber, prov.method); }
+    );
+    const changes = await runBatched(env, stmts);
+
+    let ingested = 0;
+    const corroborations: D1PreparedStatement[] = [];
+    for (let i = 0; i < ready.length; i++) {
+      if (changes[i]) ingested++;
+      else { skipped++; corroborations.push(corroborateStmt(env, "liens", ready[i].docNumber, prov.method)); }
     }
+    await runBatched(env, corroborations);
     return { ingested, skipped };
   };
 }

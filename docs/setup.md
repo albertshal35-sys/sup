@@ -197,15 +197,26 @@ actually see:
   id, or by CRFN), so a payoff closes the right loan. Only when ACRIS
   publishes no reference does it fall back to the lender+borrower name
   match.
-- **Windows are read in pages under a row budget.** Master is ~17M rows and
-  a citywide month runs to five figures, so each pull reads up to
-  `pageBudget` × 500 documents (default 3 pages = 1,500) newest-first. When
-  a window holds more than that, the pull *says so* rather than reporting a
-  clean success, and the historical backfill resumes from the oldest record
-  it reached instead of stepping over the remainder — a bounded budget slows
-  the crawl down, it does not punch holes in it. Raise a source's
-  `pageBudget` in its field map to read more per pull; see the subrequest
-  note under **Schedule** before going much higher.
+- **Windows are read under a document budget, in as few requests as
+  possible.** SoDA 2.1 `/resource/` endpoints set **no `$limit` ceiling**
+  (the 50,000 cap belongs to SoDA 2.0), so a pull asks for its whole budget
+  in a single Master request — the default 5,000 documents costs one
+  request, not ten. Each request asks for one row *more* than it keeps: if
+  that probe row comes back, the window provably holds more than the budget,
+  so "truncated" is a fact rather than a guess. When a window does overflow,
+  the historical backfill resumes from the oldest record the pull reached
+  instead of stepping over the remainder — a bounded budget slows the crawl
+  down, it does not punch holes in it. Raise a source's `docBudget` in its
+  field map to read more per pull.
+
+  At realistic NYC volume the budget rarely binds: two weeks of one document
+  class runs well under 5,000, so a 36-month backfill completes in ~79
+  chunks without truncating at all.
+
+- **Get a Socrata app token.** Paste it into the connector's API-key field.
+  Socrata throttles token-less callers through a shared per-IP pool; with a
+  token you get roughly 1,000 requests per rolling hour, which is what makes
+  sustained crawling at this volume workable. It is free to register.
 
 **Mechanic's liens, lis pendens, and tax liens are recorded ACRIS document
 types too** — not scrapes. Their `doc_type` filters are never guessed:
@@ -272,12 +283,16 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
   caps schedules per account on the Free plan); the tick computes the sweep
   boundaries in code. A sweep only *seeds* a pull queue; the
   10-minute background tick drains a couple of connectors per invocation.
-  (Workers cap upstream fetches per invocation — 50 on the Free plan, and
-  one ACRIS join costs ~23 at the default 3-page budget — so running
-  everything in one invocation would silently fail partway. Raising a
-  connector's `pageBudget` raises that cost roughly linearly, so on the Free
-  plan keep it at or below 5; the Paid plan's 1,000-subrequest ceiling
-  leaves far more room. Spreading pulls across ticks keeps every connector
+  (Workers meter two budgets per invocation: **external** fetches — 50 on
+  the Free plan — and calls to Cloudflare services like D1, capped at 1,000
+  on Free. One ACRIS join costs `1 + 2 × ceil(docs / 250)` external
+  requests, so the default 5,000-document budget costs 41, just inside the
+  external cap; running every connector in one invocation would blow it,
+  which is why pulls are spread across ticks. Raising `docBudget` raises
+  that cost linearly — 6,000 documents is about the Free-plan ceiling for a
+  single connector. The D1 side is batched (see `BulkResolver` in
+  `ingest.ts`), so ingesting those 5,000 records costs a few hundred
+  service calls rather than the ~20,000 a per-row path would. Spreading pulls across ticks keeps every connector
   inside the budget no matter how many are enabled.) Scoring, custom
   signals, entity resolution, and the digest run when the queue drains.
 - **Historical backfill** — Settings → Historical backfill, or automatic:
@@ -343,7 +358,7 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Records missing that you expected | Check Settings → Data quality — they may be quarantined (outside markets, failed a sanity gate, or failed grounding) |
 | Nothing populates at all, connectors look configured | Connectors are **disabled by default** — use **Activate all free sources** (Settings → Data sources), which enables, maps, backfills, and queues everything in one click |
 | A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
-| Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `pageBudget` and re-run the backfill to recover the day |
-| ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `pageBudget` to trade subrequests for speed |
+| Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `docBudget` and re-run the backfill to recover the day |
+| ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `docBudget` to trade subrequests for speed |
 | ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
 | Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |

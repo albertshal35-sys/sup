@@ -30,7 +30,7 @@ import { rescoreTriggers } from "./scoring";
 
 export const BACKFILL_MONTHS = 36;
 const CHUNKS_PER_CRON = 3; // running crawls advanced per background tick
-const ACRIS_CHUNK_DAYS = 7; // ACRIS window per chunk (see chunkStart)
+const ACRIS_CHUNK_DAYS = 14; // ACRIS window per chunk (see chunkStart)
 
 function monthShift(iso: string, months: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -45,10 +45,11 @@ function dayShift(iso: string, days: number): string {
 }
 
 /**
- * Window size for one chunk. ACRIS walks in short windows because NYC
- * records five figures of documents a month — a month-wide window would
- * saturate the pull budget on its newest days and leave the rest of the
- * month to be recovered chunk by chunk anyway.
+ * Window size for one chunk. ACRIS walks in shorter windows than other
+ * sources because NYC records five figures of documents a month. Two weeks
+ * of one document class sits comfortably inside the default 5,000-document
+ * pull budget, so most chunks complete their window outright; anything that
+ * does overflow is resumed, not skipped (see below).
  */
 function chunkStart(cfg: ConnectorCfg, to: string): string {
   return isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id) ? dayShift(to, -ACRIS_CHUNK_DAYS) : monthShift(to, -1);
@@ -149,7 +150,7 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
         done ? "done" : "running",
         result.ingested,
         stalled
-          ? `coverage gap: ${to} held more documents than one pull could read, so the earliest part of that day was skipped. Raise this source's field-map pageBudget, then re-run the backfill to recover it.`
+          ? `coverage gap: ${to} held more documents than one pull could read, so the earliest part of that day was skipped. Raise this source's field-map docBudget, then re-run the backfill to recover it.`
           : null,
         id
       )

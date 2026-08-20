@@ -20,11 +20,22 @@
  * backfill resume exactly there instead of stepping over the remainder —
  * coverage converges to complete at whatever rate the budget allows.
  *
- * Request budget: pages are `MASTER_PAGE` rows, companion lookups batch
- * `ID_BATCH` document_ids each, and only the companion datasets a given
- * connector actually needs are fetched. At the default budget that is
- * ~23 subrequests per connector per run, inside the Workers per-invocation
- * subrequest cap with headroom.
+ * Request budget: the window is read in as few Master requests as the
+ * budget allows (SoDA 2.1 sets no `$limit` ceiling), companion lookups
+ * batch `ID_BATCH` document_ids each, and only the companion datasets a
+ * given connector actually needs are fetched.
+ *
+ * Workers meter two separate budgets per invocation: **external** fetches
+ * (50 on the Free plan) and calls to Cloudflare services such as D1 (1,000
+ * on Free). Reading N documents costs `1 + 2*ceil(N/ID_BATCH)` external
+ * requests, so the 5,000-document default costs 41 — inside the external
+ * cap with room to spare — while the D1 side of ingesting those rows is
+ * batched (see BulkResolver in ingest.ts) to a few hundred calls, inside
+ * the service cap.
+ *
+ * Socrata throttles by app token (~1,000 requests/rolling hour) and lumps
+ * token-less callers into a shared per-IP pool, so a token configured on
+ * the connector is what makes sustained crawling at this volume viable.
  */
 
 import type { Env } from "./index";
@@ -36,13 +47,22 @@ const PARTIES_ID = "636b-3b5g";
 const REFS_ID = "pwkr-dpni";   // Real Property References — doc-to-doc cross refs
 const DOC_CODES_ID = "7isb-wh4c"; // Document Control Codes — doc_type -> human label
 
-/** Master rows per page. */
-const MASTER_PAGE = 500;
-/** Default pages per window. Override per connector via field-map `pageBudget`. */
-const DEFAULT_PAGE_BUDGET = 3;
-const MAX_PAGE_BUDGET = 20;
-/** document_ids per companion-dataset request (keeps the SoQL URL well under 8KB). */
-const ID_BATCH = 150;
+/**
+ * Documents pulled from one window per run. SoDA 2.1 `/resource/` endpoints
+ * have **no `$limit` ceiling** (the 50,000 cap is SoDA 2.0), so this number
+ * is not sized by the API — it is sized by what one Worker invocation can
+ * join and write. The binding cost is the companion joins: reading N
+ * documents costs 1 Master request plus 2*ceil(N/ID_BATCH) lookups, so the
+ * default sits just inside the Free plan's 50 *external* subrequests.
+ * Override per connector via field-map `docBudget`.
+ */
+const DEFAULT_DOC_BUDGET = 5_000;
+const MAX_DOC_BUDGET = 50_000;
+/** Rows per Master request; above this the window is read in slices. */
+const REQUEST_SLICE = 10_000;
+/** document_ids per companion request — 250 keeps the SoQL URL near 5KB,
+ *  inside the ~8KB request-line limit servers commonly enforce. */
+const ID_BATCH = 250;
 
 const BOROUGH: Record<string, { city: string; county: string }> = {
   "1": { city: "Manhattan", county: "New York" },
@@ -96,10 +116,10 @@ function needsLegals(connectorId: string): boolean {
   return connectorId !== "satisfactions";
 }
 
-export function acrisPageBudget(cfg: ConnectorCfg): number {
-  const raw = Number(cfg.fieldMap?.pageBudget);
-  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_PAGE_BUDGET;
-  return Math.min(MAX_PAGE_BUDGET, Math.floor(raw));
+export function acrisDocBudget(cfg: ConnectorCfg): number {
+  const raw = Number(cfg.fieldMap?.docBudget);
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_DOC_BUDGET;
+  return Math.min(MAX_DOC_BUDGET, Math.floor(raw));
 }
 
 /**
@@ -225,40 +245,49 @@ async function fetchByDocIds<T>(
 }
 
 /**
- * Page a Master date window newest-first under the connector's row budget.
+ * Read a Master date window newest-first, up to the connector's document
+ * budget, in as few requests as the budget allows.
+ *
  * Newest-first matters: it makes a saturated window resumable from its
  * oldest record, so nothing between that point and the window's start is
- * silently stepped over.
+ * silently stepped over. Each request asks for one row *more* than it
+ * intends to keep — if that probe row comes back, the window provably holds
+ * more than the budget and `truncated` is a fact rather than a guess.
  */
 async function fetchMasterWindow(
   cfg: ConnectorCfg,
   filter: string,
   window: { from: string; to: string }
 ): Promise<{ raw: string; master: MasterRow[]; truncated: boolean }> {
-  const budget = acrisPageBudget(cfg);
+  const budget = acrisDocBudget(cfg);
   const master: MasterRow[] = [];
-  // Every page feeds the checksum: keying it on page 1 alone would report
-  // "unchanged" for a window whose later pages moved.
-  const pages: string[] = [];
+  // Every slice feeds the checksum: keying it on the first alone would
+  // report "unchanged" for a window whose later slices moved.
+  const payloads: string[] = [];
+  let truncated = false;
 
-  for (let page = 0; page < budget; page++) {
+  while (master.length < budget) {
+    const want = Math.min(REQUEST_SLICE, budget - master.length);
     const params = new URLSearchParams({
       $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}' AND (${filter})`,
-      // document_id breaks ties so $offset paging is stable across requests.
+      // document_id breaks ties so $offset slicing is stable across requests.
       $order: "recorded_datetime DESC, document_id DESC",
-      $limit: String(MASTER_PAGE),
-      $offset: String(page * MASTER_PAGE),
+      $limit: String(want + 1), // +1 = the truncation probe
+      $offset: String(master.length),
       $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime",
     });
     const { raw, rows } = await fetchJson<MasterRow>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
-    pages.push(raw);
+    payloads.push(raw);
+
+    if (rows.length > want) {
+      master.push(...rows.slice(0, want)); // drop the probe row
+      truncated = true;
+      break;
+    }
     master.push(...rows);
-    if (rows.length < MASTER_PAGE) return { raw: pages.join(""), master, truncated: false };
+    if (rows.length <= want) break; // source ran out before the budget did
   }
-  // Every page came back full. There may or may not be more behind the
-  // budget; "truncated" is the conservative answer, and its only cost is
-  // that the backfill re-reads one already-ingested day.
-  return { raw: pages.join(""), master, truncated: true };
+  return { raw: payloads.join(""), master, truncated };
 }
 
 /** Prefer a real taxable parcel over easement / air-rights rows on the same doc. */

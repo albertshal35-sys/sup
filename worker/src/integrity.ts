@@ -231,17 +231,20 @@ export async function dataQualitySummary(env: Env): Promise<{
  * method (API vs scrape), the two independent observations corroborate
  * each other — upgrade the stored row.
  */
-export async function corroborate(
+/**
+ * A record seen from a second, independent acquisition method is upgraded to
+ * `corroborated`. Returned as a prepared statement so a page of these goes
+ * out in one batched round trip instead of one await apiece.
+ */
+export function corroborateStmt(
   env: Env,
   table: "transactions" | "loans" | "liens",
   docNumber: string,
   incomingMethod: string
-): Promise<void> {
-  await env.DB.prepare(
+): D1PreparedStatement {
+  return env.DB.prepare(
     `UPDATE ${table} SET confidence = 'corroborated'
      WHERE doc_number = ?1 AND confidence != 'corroborated'
        AND source_method IS NOT NULL AND source_method != ?2`
-  )
-    .bind(docNumber, incomingMethod)
-    .run();
+  ).bind(docNumber, incomingMethod);
 }

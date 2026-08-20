@@ -6,7 +6,7 @@ import {
   RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
   getMarkets, socrataFetch, vendorFetch, vendorUrl, connectorAuthHeaders,
 } from "./ingest";
-import { acrisCapable, acrisFetch, acrisPageBudget, discoverDocTypes, isAcrisMaster, resolveAcrisDocTypes } from "./acris";
+import { acrisCapable, acrisDocBudget, acrisFetch, discoverDocTypes, isAcrisMaster, resolveAcrisDocTypes } from "./acris";
 import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
@@ -697,8 +697,8 @@ route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
         "ACRIS window coverage",
         !r.truncated,
         r.truncated
-          ? `read back to ${r.oldestRecorded} and stopped at the ${acrisPageBudget(cfg)}-page budget — the rest of this window is recovered by the historical backfill, which resumes where the pull stopped; raise field-map pageBudget to read more per pull`
-          : `whole window read (budget ${acrisPageBudget(cfg)} page(s), not exhausted)`
+          ? `read ${rows.length.toLocaleString()} document(s) back to ${r.oldestRecorded} and stopped at the ${acrisDocBudget(cfg).toLocaleString()}-document budget — the rest of this window is recovered by the historical backfill, which resumes where the pull stopped; raise field-map docBudget to read more per pull`
+          : `whole window read (${rows.length.toLocaleString()} of a ${acrisDocBudget(cfg).toLocaleString()}-document budget)`
       );
       const withBbl = rows.filter((row) => typeof row.apn === "string" && row.apn).length;
       // Satisfactions are deliberately address-free (they discharge a loan,
