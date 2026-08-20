@@ -687,9 +687,11 @@ route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
         });
         if (resolved) push("Resolve doc types", true, `matched in Document Control Codes: ${resolved} (saved to field map)`);
       }
-      const r = await acrisFetch(env, cfg, w);
+      // Mirror the routine pull, which filters on modified_date so that
+      // corrections to older documents surface too.
+      const r = await acrisFetch(env, cfg, w, "modified_date");
       rows = r.rows;
-      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
+      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} on modified_date (recorded or corrected) · ${rows.length} joined record(s)`);
       // Coverage is the thing an operator can't see from a row sample: say
       // plainly whether this window was read to the end or cut off by the
       // budget, and how to widen it.

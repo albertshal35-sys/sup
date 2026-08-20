@@ -486,6 +486,7 @@ const provBinds = (p: Provenance) => [p.sourceId, p.sourceUrl, p.method, p.confi
 interface DeedRec extends AddressRec {
   docNumber: string; price: number; isCash: boolean; deedType?: string | null;
   buyerName: string; sellerName: string; recordedAt: string;
+  sourceModifiedAt?: string | null; percentTransferred?: number | null;
 }
 
 async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
@@ -501,13 +502,22 @@ async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise
 
   const stmts = ready.map((r) =>
     env.DB.prepare(
-      `INSERT OR IGNORE INTO transactions
-         (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name, recorded_at, doc_number, origin${PROV_COLS})
-       VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'live', ?11, ?12, ?13, ?14, datetime('now'))`
+      `INSERT INTO transactions
+         (id, property_id, entity_id, side, price, is_cash, deed_type, buyer_name, seller_name,
+          recorded_at, doc_number, source_modified_at, percent_transferred, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, 'purchase', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'live', ?13, ?14, ?15, ?16, datetime('now'))
+       ON CONFLICT(doc_number) WHERE doc_number IS NOT NULL DO UPDATE SET
+         property_id = excluded.property_id, entity_id = excluded.entity_id,
+         price = excluded.price, deed_type = excluded.deed_type,
+         buyer_name = excluded.buyer_name, seller_name = excluded.seller_name,
+         recorded_at = excluded.recorded_at, percent_transferred = excluded.percent_transferred,
+         source_modified_at = excluded.source_modified_at, ingested_at = datetime('now')
+       WHERE excluded.source_modified_at > COALESCE(transactions.source_modified_at, '')`
     ).bind(
       `trx_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.buyerName),
       Math.round(r.price || 0), r.isCash ? 1 : 0, r.deedType ?? null, r.buyerName, r.sellerName,
-      r.recordedAt, r.docNumber, ...provBinds(prov)
+      r.recordedAt, r.docNumber, r.sourceModifiedAt ?? null, r.percentTransferred ?? null,
+      ...provBinds(prov)
     )
   );
   const changes = await runBatched(env, stmts);
@@ -526,6 +536,7 @@ interface LoanRec extends AddressRec {
   docNumber: string; lenderName: string; lenderType?: string | null; principal: number;
   ratePct?: number | null; originatedAt: string; termMonths?: number | null;
   maturityDate?: string | null; borrowerName: string;
+  sourceModifiedAt?: string | null;
 }
 
 async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
@@ -542,15 +553,21 @@ async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise
 
   const stmts = ready.map((r) =>
     env.DB.prepare(
-      `INSERT OR IGNORE INTO loans
+      `INSERT INTO loans
          (id, property_id, entity_id, lender_name, lender_type, principal, rate_pct,
-          originated_at, term_months, maturity_date, doc_number, origin${PROV_COLS})
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'live', ?12, ?13, ?14, ?15, datetime('now'))`
+          originated_at, term_months, maturity_date, doc_number, source_modified_at, origin${PROV_COLS})
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'live', ?13, ?14, ?15, ?16, datetime('now'))
+       ON CONFLICT(doc_number) WHERE doc_number IS NOT NULL DO UPDATE SET
+         property_id = excluded.property_id, entity_id = excluded.entity_id,
+         lender_name = excluded.lender_name, lender_type = excluded.lender_type,
+         principal = excluded.principal, originated_at = excluded.originated_at,
+         source_modified_at = excluded.source_modified_at, ingested_at = datetime('now')
+       WHERE excluded.source_modified_at > COALESCE(loans.source_modified_at, '')`
     ).bind(
       `lon_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.borrowerName),
       r.lenderName, allowedTypes.has(r.lenderType ?? "") ? r.lenderType! : "private",
       Math.round(r.principal || 0), r.ratePct ?? null, r.originatedAt, r.termMonths ?? 12,
-      r.maturityDate ?? null, r.docNumber, ...provBinds(prov)
+      r.maturityDate ?? null, r.docNumber, r.sourceModifiedAt ?? null, ...provBinds(prov)
     )
   );
   const changes = await runBatched(env, stmts);
@@ -601,7 +618,7 @@ async function upsertPermits(env: Env, rows: PermitRec[], prov: Provenance): Pro
 
 interface LienRec extends AddressRec {
   docNumber: string; lienType?: string | null; claimant: string; amount: number;
-  filedAt: string; ownerName: string;
+  filedAt: string; ownerName: string; sourceModifiedAt?: string | null;
 }
 
 const LIEN_TYPES = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens", "violation", "auction"]);
@@ -620,13 +637,20 @@ function makeLienUpserter(defaultType: string) {
 
     const stmts = ready.map((r) =>
       env.DB.prepare(
-        `INSERT OR IGNORE INTO liens
-           (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number, origin${PROV_COLS})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'live', ?9, ?10, ?11, ?12, datetime('now'))`
+        `INSERT INTO liens
+           (id, property_id, entity_id, lien_type, claimant, amount, filed_at, doc_number,
+            source_modified_at, origin${PROV_COLS})
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'live', ?10, ?11, ?12, ?13, datetime('now'))
+         ON CONFLICT(doc_number) WHERE doc_number IS NOT NULL DO UPDATE SET
+           property_id = excluded.property_id, entity_id = excluded.entity_id,
+           claimant = excluded.claimant, amount = excluded.amount, filed_at = excluded.filed_at,
+           source_modified_at = excluded.source_modified_at, ingested_at = datetime('now')
+         WHERE excluded.source_modified_at > COALESCE(liens.source_modified_at, '')`
       ).bind(
         `lin_${crypto.randomUUID().slice(0, 12)}`, resolver.property(r), resolver.entity(r.ownerName),
         LIEN_TYPES.has(r.lienType ?? "") ? r.lienType! : defaultType, r.claimant,
-        Math.round(r.amount || 0), r.filedAt, r.docNumber, ...provBinds(prov)
+        Math.round(r.amount || 0), r.filedAt, r.docNumber, r.sourceModifiedAt ?? null,
+        ...provBinds(prov)
       )
     );
     const changes = await runBatched(env, stmts);
@@ -810,10 +834,18 @@ export async function acquireAndIngest(
       to: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
     };
     if (isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id)) {
-      // NYC ACRIS: native three-dataset join (Master + Legals + Parties).
-      // Lien-family connectors resolve their doc_type codes from the city's
-      // code table on first pull; the filter persists to the field map.
-      const result = await acrisFetch(env, cfg, w);
+      // NYC ACRIS: native multi-dataset join (Master + Legals + Parties,
+      // plus References for satisfactions). Lien-family connectors resolve
+      // their doc_type codes from the city's code table on first pull; the
+      // filter persists to the field map.
+      //
+      // A caller-supplied window means the historical backfill is walking
+      // recording history, so it filters on recorded_datetime. A routine
+      // catch-up pull filters on modified_date instead: DOF republishes
+      // documents "recorded OR corrected" each month, and a corrected 2019
+      // document still carries its 2019 recorded date — filtering on
+      // recorded_datetime would never surface the correction.
+      const result = await acrisFetch(env, cfg, w, window ? "recorded_datetime" : "modified_date");
       raw = result.raw;
       rows = result.rows;
       truncated = result.truncated;

@@ -175,7 +175,19 @@ Connectors come **pre-filled with real endpoints** (seeded by migrations
 (amounts/dates) with Legals (`8h5j-fqxa`, addresses + borough/block/lot),
 Parties (`636b-3b5g`, names) and — for satisfactions — References
 (`pwkr-dpni`, document-to-document cross refs) by `document_id`, producing
-complete records from the free city APIs. No field map is needed for
+complete records from the free city APIs. The record layouts, code tables
+and publishing model are specified in DOF's *ACRIS OpenData Extract Guide*
+(v1.0), which is the reference for everything in this section.
+
+Note the borough coverage baked into the data: the guide lists borough
+codes 1–4 (Manhattan, Bronx, Brooklyn, Queens) only. Staten Island records
+with the Richmond County Clerk, which is why it needs scrape mode.
+
+**On API versions:** these connectors use the SODA 2.1 `/resource/{id}.json`
+endpoints, which need no credentials (an app token only raises the throttle)
+and accept an unbounded `$limit`. There is also a SODA 3 endpoint
+(`/api/v3/views/{id}/query.json`) which **requires authentication** — it is a
+different query interface, not a larger one, so it buys nothing here. No field map is needed for
 deeds/loans/satisfactions, whose document types default to `DEED` /
 `MTGE`+`AGMT` / `SAT`. Lenders are auto-classified bank vs private by name,
 and all-cash purchases are detected by reconciling deeds against mortgage
@@ -212,6 +224,37 @@ actually see:
   At realistic NYC volume the budget rarely binds: two weeks of one document
   class runs well under 5,000, so a 36-month backfill completes in ~79
   chunks without truncating at all.
+
+- **ACRIS republishes corrections, and the pipeline applies them.** Per the
+  DOF *ACRIS OpenData Extract Guide* (v1.0), each monthly extract contains
+  every document "either recorded **or corrected** in the previous month",
+  Master carries a **Modified Date** meaning "recorded or index data last
+  corrected", and "the records with the latest good through date are the
+  current records". So a document is not write-once: amounts, dates,
+  parties and parcels can change after the fact.
+
+  Two consequences are wired in. Routine catch-up pulls filter on
+  `modified_date`, not `recorded_datetime` — a 2019 deed corrected last
+  month still carries its 2019 recording date, so a recorded-date filter
+  would never surface it. And record upserts compare `source_modified_at`
+  and apply the newer revision, instead of ignoring anything whose document
+  number is already on file. The historical backfill still walks
+  `recorded_datetime`, because there it is deliberately reading recording
+  history.
+
+- **Expect monthly, not daily, movement.** The extract is regenerated once a
+  month. Daily pulls are cheap no-ops between publications and then take a
+  batch when one lands — a run of quiet days is the source behaving
+  normally, not a broken connector.
+
+- **Partial-interest deeds are flagged, not counted as sales.** Master's
+  *Percentage Transferred* rides along on deed records, so a conveyance of a
+  fractional interest can be told apart from a whole-property sale.
+
+- **Lien party roles come from the code table.** Document Control Codes
+  publishes a Party1/Party2 role name per document type, so the mechanic's
+  lien / lis pendens / tax lien shaper reads which side is the owner and
+  which is the claimant rather than assuming.
 
 - **Get a Socrata app token.** Paste it into the connector's API-key field.
   Socrata throttles token-less callers through a shared per-IP pool; with a
@@ -360,5 +403,6 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
 | Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `docBudget` and re-run the backfill to recover the day |
 | ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `docBudget` to trade subrequests for speed |
+| ACRIS connector returns 0 rows for days at a time | Expected. The extract is regenerated monthly, so daily pulls are no-ops between publications and take a batch when one lands |
 | ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
 | Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |

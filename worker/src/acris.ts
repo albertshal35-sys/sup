@@ -97,6 +97,18 @@ const FAMILY_DOC_PATTERNS: Record<string, RegExp> = {
   tax_liens: /TAX\s*LIEN/i,        // NYC / FEDERAL TAX LIEN variants
 };
 
+/**
+ * Which Master date a window filters on.
+ *
+ * `recorded_datetime` walks recording history — what a backfill wants.
+ * `modified_date` is "recorded OR index data last corrected", so it is the
+ * only field that surfaces a correction to an old document: DOF republishes
+ * documents corrected in the previous month, and such a row still carries
+ * its original (possibly years-old) recorded date. An incremental pull
+ * filtered on recorded_datetime would never see it.
+ */
+export type AcrisDateField = "recorded_datetime" | "modified_date";
+
 export function isAcrisMaster(url: string | null): boolean {
   return Boolean(url && url.includes(MASTER_ID));
 }
@@ -173,6 +185,54 @@ function docCodeColumns(rows: Record<string, unknown>[]): { code: string; desc: 
   return code && desc ? { code, desc } : null;
 }
 
+/**
+ * Party 1 / 2 role names per document type, straight from the Document
+ * Control Codes table (guide fields 5-7: "Party type N name for this
+ * document type").
+ *
+ * This replaces an assumption the lien-family shaper used to make out loud:
+ * that party 1 is always the property-side party. That holds for deeds
+ * (GRANTOR/GRANTEE) and mortgages (MORTGAGOR/MORTGAGEE), but the city
+ * publishes the actual roles per doc type, so there is no reason to guess
+ * for mechanic's liens, notices of pendency or tax liens.
+ */
+export interface PartyRoles { party1: string | null; party2: string | null }
+
+async function fetchPartyRoles(cfg: ConnectorCfg): Promise<Map<string, PartyRoles>> {
+  const out = new Map<string, PartyRoles>();
+  if (!cfg.baseUrl) return out;
+  const base = resourceBase(cfg.baseUrl, DOC_CODES_ID);
+  const { rows } = await fetchJson<Record<string, string>>(`${base}?$limit=500`, cfg.apiKey);
+  const cols = docCodeColumns(rows);
+  if (!cols) return out;
+  const keys = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const p1 = keys.find((k) => /party_*1/i.test(k));
+  const p2 = keys.find((k) => /party_*2/i.test(k));
+  if (!p1 || !p2) return out;
+  for (const r of rows) {
+    const code = String(r[cols.code] ?? "").trim();
+    if (code) out.set(code, { party1: String(r[p1] ?? "").trim() || null, party2: String(r[p2] ?? "").trim() || null });
+  }
+  return out;
+}
+
+/** Roles naming the side that owns / is burdened by the property. */
+const PROPERTY_SIDE = /OWNER|MORTGAGOR|GRANTOR|DEBTOR|DEFENDANT|SELLER|ASSIGNOR|BORROWER/i;
+/** Roles naming the side asserting the claim. */
+const CLAIM_SIDE = /LIENOR|CLAIMANT|MORTGAGEE|GRANTEE|CREDITOR|PLAINTIFF|BUYER|ASSIGNEE|LENDER/i;
+
+/**
+ * Decide which party slot is the property owner and which is the claimant
+ * for one document type. Falls back to the historical party1=owner
+ * convention when the code table says nothing useful.
+ */
+function orientParties(roles: PartyRoles | undefined): { ownerFirst: boolean } {
+  const p1 = roles?.party1 ?? "", p2 = roles?.party2 ?? "";
+  if (PROPERTY_SIDE.test(p1) || CLAIM_SIDE.test(p2)) return { ownerFirst: true };
+  if (PROPERTY_SIDE.test(p2) || CLAIM_SIDE.test(p1)) return { ownerFirst: false };
+  return { ownerFirst: true };
+}
+
 interface MasterRow {
   document_id: string;
   crfn?: string;
@@ -180,6 +240,10 @@ interface MasterRow {
   document_amt?: string;
   document_date?: string;
   recorded_datetime?: string;
+  /** "Date Document was Recorded or Index Data was Last Corrected" (guide, Master field 9). */
+  modified_date?: string;
+  /** "Reported percentage of interest transferred" (guide, Master field 13). */
+  percent_trans?: string;
 }
 interface LegalRow {
   document_id: string;
@@ -257,7 +321,8 @@ async function fetchByDocIds<T>(
 async function fetchMasterWindow(
   cfg: ConnectorCfg,
   filter: string,
-  window: { from: string; to: string }
+  window: { from: string; to: string },
+  dateField: AcrisDateField
 ): Promise<{ raw: string; master: MasterRow[]; truncated: boolean }> {
   const budget = acrisDocBudget(cfg);
   const master: MasterRow[] = [];
@@ -269,12 +334,12 @@ async function fetchMasterWindow(
   while (master.length < budget) {
     const want = Math.min(REQUEST_SLICE, budget - master.length);
     const params = new URLSearchParams({
-      $where: `recorded_datetime >= '${window.from}' AND recorded_datetime < '${window.to}' AND (${filter})`,
+      $where: `${dateField} >= '${window.from}' AND ${dateField} < '${window.to}' AND (${filter})`,
       // document_id breaks ties so $offset slicing is stable across requests.
-      $order: "recorded_datetime DESC, document_id DESC",
+      $order: `${dateField} DESC, document_id DESC`,
       $limit: String(want + 1), // +1 = the truncation probe
       $offset: String(master.length),
-      $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime",
+      $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime,modified_date,percent_trans",
     });
     const { raw, rows } = await fetchJson<MasterRow>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
     payloads.push(raw);
@@ -313,6 +378,17 @@ function toBbl(legal: LegalRow | undefined): string | null {
   return `${boro}${String(block).padStart(5, "0")}${String(lot).padStart(4, "0")}`;
 }
 
+/**
+ * Percentage of interest transferred, when ACRIS reports one. The field is
+ * null far more often than not, and a stated 0 means "not reported" rather
+ * than "nothing conveyed", so both collapse to null.
+ */
+function pctTransferred(raw: string | undefined): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 100) return null;
+  return n;
+}
+
 /** Primary name plus any co-parties, so co-borrowers aren't dropped. */
 function joinNames(names: string[]): string {
   const seen = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
@@ -338,7 +414,8 @@ export interface AcrisPull {
 export async function acrisFetch(
   env: Env,
   cfg: ConnectorCfg,
-  window: { from: string; to: string }
+  window: { from: string; to: string },
+  dateField: AcrisDateField = "recorded_datetime"
 ): Promise<AcrisPull> {
   let filter = cfg.fieldMap?.where?.replace(/;/g, "").trim() || DOC_FILTERS[cfg.id] || null;
   if (!filter) filter = await resolveAcrisDocTypes(env, cfg);
@@ -348,12 +425,25 @@ export async function acrisFetch(
     );
   }
 
-  const { raw, master, truncated } = await fetchMasterWindow(cfg, filter, window);
+  let pull;
+  try {
+    pull = await fetchMasterWindow(cfg, filter, window, dateField);
+  } catch (err) {
+    // Never let an incremental pull die on a column the portal may have
+    // typed differently; recorded_datetime is always present, it just
+    // cannot see corrections.
+    if (dateField === "modified_date") {
+      pull = await fetchMasterWindow(cfg, filter, window, "recorded_datetime");
+    } else throw err;
+  }
+  const { raw, master, truncated } = pull;
   if (master.length === 0) return { raw, rows: [], truncated: false, oldestRecorded: null };
 
+  // Resumption keys off the same field the window was ordered by, or the
+  // cursor would jump somewhere the pull never actually reached.
   const oldestRecorded =
     master
-      .map((m) => (m.recorded_datetime ?? "").slice(0, 10))
+      .map((m) => ((dateField === "modified_date" ? m.modified_date : m.recorded_datetime) ?? "").slice(0, 10))
       .filter(Boolean)
       .sort()[0] ?? null;
 
@@ -399,6 +489,14 @@ export async function acrisFetch(
   const refsByDoc = new Map<string, RefRow>();
   for (const r of refs) if (!refsByDoc.has(r.document_id)) refsByDoc.set(r.document_id, r);
 
+  // Deeds and mortgages have a fixed, well-known party convention. The
+  // lien family does not, so read the roles the city publishes per doc type
+  // rather than assuming. Best-effort: a failure here just keeps the old
+  // convention.
+  const partyRoles = LIEN_FAMILY.has(cfg.id)
+    ? await fetchPartyRoles(cfg).catch(() => new Map<string, PartyRoles>())
+    : new Map<string, PartyRoles>();
+
   // Satisfactions reference their mortgage by CRFN as often as by doc id;
   // map CRFNs we saw in this window back onto document ids so the loan
   // match is exact instead of a lender+borrower name guess.
@@ -429,6 +527,8 @@ export async function acrisFetch(
       sourceDocType: m.doc_type ?? null,
       parcelCount: parcels.length || null,
       propertyClass: legal?.property_type ?? null,
+      // Lets the upsert tell a correction from a stale re-read.
+      sourceModifiedAt: (m.modified_date || m.recorded_datetime || "").slice(0, 10) || null,
     };
 
     if (cfg.id === "county_deeds") {
@@ -439,6 +539,10 @@ export async function acrisFetch(
         // mortgage lands on the same parcel within the following weeks.
         isCash: true,
         deedType: null,
+        // A deed conveying a fractional interest is not a sale of the
+        // property; carrying the reported percentage keeps the flip and
+        // cash-purchase signals from reading one as a full transfer.
+        percentTransferred: pctTransferred(m.percent_trans),
         buyerName: joinNames(party.p2),   // grantee
         sellerName: joinNames(party.p1),  // grantor
         recordedAt: date,
@@ -470,14 +574,15 @@ export async function acrisFetch(
         satisfiedAt: date,
       });
     } else if (LIEN_FAMILY.has(cfg.id)) {
-      // Mechanic's lien / Notice of Pendency / recorded tax lien — same
-      // party convention as deeds/mortgages (party1 = the property-side
-      // party, party2 = the other side), which is our best-effort mapping
-      // until confirmed per doc class via Discover ACRIS doc types.
+      // Mechanic's lien / Notice of Pendency / recorded tax lien. Which
+      // party slot holds the owner and which holds the claimant is read
+      // from the Document Control Codes table for this doc type, not
+      // assumed (see orientParties).
+      const { ownerFirst } = orientParties(m.doc_type ? partyRoles.get(m.doc_type) : undefined);
       rows.push({
         ...common,
-        claimant: joinNames(party.p2),
-        ownerName: joinNames(party.p1),
+        claimant: joinNames(ownerFirst ? party.p2 : party.p1),
+        ownerName: joinNames(ownerFirst ? party.p1 : party.p2),
         amount,
         filedAt: date,
       });

@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   seller_name  TEXT,
   recorded_at  TEXT NOT NULL,                    -- county recording date
   doc_number   TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
+  percent_transferred REAL,                      -- fractional interest conveyed, if reported
   source       TEXT NOT NULL DEFAULT 'county_recorder',
   origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id    TEXT,                             -- connector that produced the row
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS loans (
   lien_position  INTEGER NOT NULL DEFAULT 1,
   status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paid_off','defaulted','refinanced')),
   doc_number     TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
   source         TEXT NOT NULL DEFAULT 'county_recorder',
   origin         TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id      TEXT,
@@ -184,6 +187,7 @@ CREATE TABLE IF NOT EXISTS liens (
   filed_at     TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','released','disputed','foreclosing')),
   doc_number   TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
   source       TEXT NOT NULL DEFAULT 'county_recorder',
   origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id    TEXT,
@@ -193,6 +197,9 @@ CREATE TABLE IF NOT EXISTS liens (
   ingested_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_liens_doc ON liens(doc_number) WHERE doc_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tx_modified    ON transactions(source_modified_at);
+CREATE INDEX IF NOT EXISTS idx_loans_modified ON loans(source_modified_at);
+CREATE INDEX IF NOT EXISTS idx_liens_modified ON liens(source_modified_at);
 CREATE INDEX IF NOT EXISTS idx_liens_filed ON liens(status, filed_at DESC);
 
 -- ------------------------------------------------------------
