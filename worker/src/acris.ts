@@ -244,9 +244,12 @@ interface MasterRow {
   modified_date?: string;
   /** "Reported percentage of interest transferred" (guide, Master field 13). */
   percent_trans?: string;
+  /** Marks which revision of a document's index data this row is. */
+  good_through_date?: string;
 }
 interface LegalRow {
   document_id: string;
+  good_through_date?: string;
   borough?: string;
   block?: string;
   lot?: string;
@@ -259,11 +262,19 @@ interface LegalRow {
 }
 interface PartyRow {
   document_id: string;
+  good_through_date?: string;
   party_type?: string;
   name?: string;
+  /** Parties fields 5-10: the address the party stated on the instrument. */
+  address_1?: string;
+  address_2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
 }
 interface RefRow {
   document_id: string;
+  good_through_date?: string;
   reference_by_doc_id?: string;
   reference_by_crfn_?: string;
 }
@@ -339,7 +350,7 @@ async function fetchMasterWindow(
       $order: `${dateField} DESC, document_id DESC`,
       $limit: String(want + 1), // +1 = the truncation probe
       $offset: String(master.length),
-      $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime,modified_date,percent_trans",
+      $select: "document_id,crfn,doc_type,document_amt,document_date,recorded_datetime,modified_date,percent_trans,good_through_date",
     });
     const { raw, rows } = await fetchJson<MasterRow>(`${cfg.baseUrl}?${params}`, cfg.apiKey);
     payloads.push(raw);
@@ -379,6 +390,47 @@ function toBbl(legal: LegalRow | undefined): string | null {
 }
 
 /**
+ * ACRIS publishes dates as MM/DD/YYYY in the extract, while Socrata may
+ * surface the same column as an ISO timestamp. Normalize to YYYY-MM-DD on
+ * the way in: the revision guard compares these strings, and comparing
+ * MM/DD/YYYY lexicographically would order revisions by month-of-year.
+ */
+export function toIsoDate(raw: string | undefined | null): string | null {
+  const v = (raw ?? "").trim();
+  if (!v) return null;
+  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+  return null;
+}
+
+/** Sort key for "which revision is current" — null sorts oldest. */
+const revKey = (raw: string | undefined | null): string => toIsoDate(raw) ?? "";
+
+/**
+ * Keep only the current revision of each document.
+ *
+ * Per the Real Property Master data dictionary: "Documents in this dataset
+ * are uniquely identified by both the document id and CRFN fields; however
+ * to find the most current version of the index data for the document, one
+ * must find the record with the most recent good through date... some
+ * documents may have more than one." When DOF corrects a document, ALL of
+ * its index data is re-published under a new good-through date — in Master
+ * and in every companion dataset alike. Without this collapse a corrected
+ * document yields duplicate records, an inflated parcel count, and party
+ * names merged across revisions.
+ */
+function currentRevision<T extends { document_id: string; good_through_date?: string }>(rows: T[]): T[] {
+  const best = new Map<string, string>();
+  for (const r of rows) {
+    const k = revKey(r.good_through_date);
+    if (!best.has(r.document_id) || k > best.get(r.document_id)!) best.set(r.document_id, k);
+  }
+  return rows.filter((r) => revKey(r.good_through_date) === best.get(r.document_id));
+}
+
+/**
  * Percentage of interest transferred, when ACRIS reports one. The field is
  * null far more often than not, and a stated 0 means "not reported" rather
  * than "nothing conveyed", so both collapse to null.
@@ -387,6 +439,25 @@ function pctTransferred(raw: string | undefined): number | null {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0 || n > 100) return null;
   return n;
+}
+
+/** A party address as stated on the instrument. */
+export interface PartyAddress {
+  address: string | null; city: string | null; state: string | null; zip: string | null;
+}
+interface PartySlots { p1: string[]; p2: string[]; a1: PartyAddress | null; a2: PartyAddress | null }
+
+/**
+ * The mailing address a party put on a recorded document. For an LLC with
+ * no other public footprint this is frequently the only contact detail that
+ * exists, and the Parties rows are already fetched for the names — so it is
+ * free to collect.
+ */
+function partyAddress(p: PartyRow): PartyAddress | null {
+  const line = [p.address_1, p.address_2].map((v) => (v ?? "").trim()).filter(Boolean).join(" ");
+  const city = (p.city ?? "").trim(), state = (p.state ?? "").trim(), zip = (p.zip ?? "").trim();
+  if (!line && !city && !zip) return null;
+  return { address: line || null, city: city || null, state: state || null, zip: zip || null };
 }
 
 /** Primary name plus any co-parties, so co-borrowers aren't dropped. */
@@ -436,15 +507,18 @@ export async function acrisFetch(
       pull = await fetchMasterWindow(cfg, filter, window, "recorded_datetime");
     } else throw err;
   }
-  const { raw, master, truncated } = pull;
+  const { raw, master: masterRaw, truncated } = pull;
+  // A corrected document appears once per revision. Collapse to the current
+  // one before spending doc-id budget or shaping records.
+  const master = currentRevision(masterRaw);
   if (master.length === 0) return { raw, rows: [], truncated: false, oldestRecorded: null };
 
   // Resumption keys off the same field the window was ordered by, or the
   // cursor would jump somewhere the pull never actually reached.
   const oldestRecorded =
     master
-      .map((m) => ((dateField === "modified_date" ? m.modified_date : m.recorded_datetime) ?? "").slice(0, 10))
-      .filter(Boolean)
+      .map((m) => toIsoDate(dateField === "modified_date" ? m.modified_date : m.recorded_datetime))
+      .filter((d): d is string => Boolean(d))
       .sort()[0] ?? null;
 
   const ids = [...new Set(master.map((m) => m.document_id).filter(Boolean))];
@@ -455,17 +529,17 @@ export async function acrisFetch(
     wantLegals
       ? fetchByDocIds<LegalRow>(
           resourceBase(cfg.baseUrl, LEGALS_ID), ids, cfg.apiKey,
-          "document_id,borough,block,lot,easement,air_rights,property_type,street_number,street_name,unit"
+          "document_id,good_through_date,borough,block,lot,easement,air_rights,property_type,street_number,street_name,unit"
         )
       : Promise.resolve([] as LegalRow[]),
     fetchByDocIds<PartyRow>(
       resourceBase(cfg.baseUrl, PARTIES_ID), ids, cfg.apiKey,
-      "document_id,party_type,name"
+      "document_id,good_through_date,party_type,name,address_1,address_2,city,state,zip"
     ),
     wantRefs
       ? fetchByDocIds<RefRow>(
           resourceBase(cfg.baseUrl, REFS_ID), ids, cfg.apiKey,
-          "document_id,reference_by_doc_id,reference_by_crfn_"
+          "document_id,good_through_date,reference_by_doc_id,reference_by_crfn_"
         ).catch(() => [] as RefRow[]) // refs are an enrichment, never a hard failure
       : Promise.resolve([] as RefRow[]),
   ]);
@@ -474,20 +548,20 @@ export async function acrisFetch(
   // doc_number is the idempotency key, so the record stays one row bound to
   // the primary parcel; the parcel count rides along as a portfolio signal.
   const legalsByDoc = new Map<string, LegalRow[]>();
-  for (const l of legals) {
+  for (const l of currentRevision(legals)) {
     const list = legalsByDoc.get(l.document_id) ?? [];
     list.push(l);
     legalsByDoc.set(l.document_id, list);
   }
-  const partiesByDoc = new Map<string, { p1: string[]; p2: string[] }>();
-  for (const p of parties) {
-    const slot = partiesByDoc.get(p.document_id) ?? { p1: [], p2: [] };
-    if (p.party_type === "1" && p.name) slot.p1.push(p.name);
-    if (p.party_type === "2" && p.name) slot.p2.push(p.name);
+  const partiesByDoc = new Map<string, PartySlots>();
+  for (const p of currentRevision(parties)) {
+    const slot = partiesByDoc.get(p.document_id) ?? { p1: [], p2: [], a1: null, a2: null };
+    if (p.party_type === "1" && p.name) { slot.p1.push(p.name); slot.a1 ??= partyAddress(p); }
+    if (p.party_type === "2" && p.name) { slot.p2.push(p.name); slot.a2 ??= partyAddress(p); }
     partiesByDoc.set(p.document_id, slot);
   }
   const refsByDoc = new Map<string, RefRow>();
-  for (const r of refs) if (!refsByDoc.has(r.document_id)) refsByDoc.set(r.document_id, r);
+  for (const r of currentRevision(refs)) if (!refsByDoc.has(r.document_id)) refsByDoc.set(r.document_id, r);
 
   // Deeds and mortgages have a fixed, well-known party convention. The
   // lien family does not, so read the roles the city publishes per doc type
@@ -507,12 +581,12 @@ export async function acrisFetch(
   for (const m of master) {
     const parcels = legalsByDoc.get(m.document_id) ?? [];
     const legal = parcels.length > 0 ? pickPrimaryLegal(parcels) : undefined;
-    const party = partiesByDoc.get(m.document_id) ?? { p1: [], p2: [] };
+    const party: PartySlots = partiesByDoc.get(m.document_id) ?? { p1: [], p2: [], a1: null, a2: null };
     const b = legal?.borough ? BOROUGH[legal.borough] : undefined;
     const address = legal
       ? [legal.street_number, legal.street_name, legal.unit].filter(Boolean).join(" ").trim()
       : "";
-    const date = (m.document_date || m.recorded_datetime || "").slice(0, 10);
+    const date = toIsoDate(m.document_date) || toIsoDate(m.recorded_datetime) || "";
     const amount = Number(m.document_amt ?? 0);
     const common = {
       docNumber: m.document_id,
@@ -527,8 +601,11 @@ export async function acrisFetch(
       sourceDocType: m.doc_type ?? null,
       parcelCount: parcels.length || null,
       propertyClass: legal?.property_type ?? null,
-      // Lets the upsert tell a correction from a stale re-read.
-      sourceModifiedAt: (m.modified_date || m.recorded_datetime || "").slice(0, 10) || null,
+      // Lets the upsert tell a correction from a stale re-read. Good-through
+      // date is the city's own "which revision is current" marker, so it
+      // leads; modified date backs it up.
+      sourceModifiedAt:
+        toIsoDate(m.good_through_date) || toIsoDate(m.modified_date) || toIsoDate(m.recorded_datetime),
     };
 
     if (cfg.id === "county_deeds") {
@@ -545,6 +622,7 @@ export async function acrisFetch(
         percentTransferred: pctTransferred(m.percent_trans),
         buyerName: joinNames(party.p2),   // grantee
         sellerName: joinNames(party.p1),  // grantor
+        entityAddress: party.a2,          // the buyer is the entity we track
         recordedAt: date,
       });
     } else if (cfg.id === "county_loans") {
@@ -559,6 +637,7 @@ export async function acrisFetch(
         termMonths: null,
         maturityDate: null,
         borrowerName: joinNames(party.p1), // mortgagor
+        entityAddress: party.a1,
       });
     } else if (cfg.id === "satisfactions") {
       const ref = refsByDoc.get(m.document_id);
@@ -583,6 +662,7 @@ export async function acrisFetch(
         ...common,
         claimant: joinNames(ownerFirst ? party.p2 : party.p1),
         ownerName: joinNames(ownerFirst ? party.p1 : party.p2),
+        entityAddress: ownerFirst ? party.a1 : party.a2,
         amount,
         filedAt: date,
       });

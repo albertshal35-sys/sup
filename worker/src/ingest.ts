@@ -36,7 +36,7 @@ import { rescoreTriggers } from "./scoring";
 import { extractRecords, renderPageMarkdown, verifyGrounding } from "./ai";
 import { maybeSendDigest } from "./alerts";
 import { gateRecords, recordSourceStats, corroborateStmt, type Provenance } from "./integrity";
-import { acrisCapable, acrisFetch, isAcrisMaster } from "./acris";
+import { acrisCapable, acrisFetch, isAcrisMaster, type PartyAddress } from "./acris";
 import { evaluateCustomSignals } from "./signals";
 import { generateMergeSuggestions } from "./resolution";
 
@@ -337,9 +337,44 @@ class BulkResolver {
   constructor(private env: Env) {}
 
   /** Resolve everything this page needs. Safe to call once per page. */
-  async warm(records: AddressRec[], names: (string | null | undefined)[]): Promise<void> {
+  async warm(
+    records: AddressRec[],
+    names: (string | null | undefined)[],
+    addresses?: Array<{ name: string | null | undefined; address: PartyAddress | null | undefined; seenAt?: string | null }>
+  ): Promise<void> {
     await this.warmProperties(records);
     await this.warmEntities(names);
+    if (addresses?.length) await this.recordMailingAddresses(addresses);
+  }
+
+  /**
+   * Persist the address a party stated on the instrument. Only fills a gap
+   * or replaces one supplied by an older document revision — a hand-entered
+   * or more recent address is never overwritten by an older filing.
+   */
+  private async recordMailingAddresses(
+    entries: Array<{ name: string | null | undefined; address: PartyAddress | null | undefined; seenAt?: string | null }>
+  ): Promise<void> {
+    const best = new Map<string, { addr: PartyAddress; seenAt: string }>();
+    for (const e of entries) {
+      const id = this.entity(e.name);
+      if (!id || !e.address) continue;
+      const seenAt = e.seenAt ?? "";
+      const prev = best.get(id);
+      if (!prev || seenAt > prev.seenAt) best.set(id, { addr: e.address, seenAt });
+    }
+    if (best.size === 0) return;
+    const stmts: D1PreparedStatement[] = [];
+    for (const [id, { addr, seenAt }] of best) {
+      stmts.push(
+        this.env.DB.prepare(
+          `UPDATE entities SET mailing_address = ?1, mailing_city = ?2, mailing_state = ?3,
+             mailing_zip = ?4, mailing_seen_at = ?5, updated_at = datetime('now')
+           WHERE id = ?6 AND (mailing_seen_at IS NULL OR mailing_seen_at < ?5)`
+        ).bind(addr.address, addr.city, addr.state, addr.zip, seenAt || null, id)
+      );
+    }
+    await runBatched(this.env, stmts);
   }
 
   property(rec: AddressRec): string | null {
@@ -487,6 +522,7 @@ interface DeedRec extends AddressRec {
   docNumber: string; price: number; isCash: boolean; deedType?: string | null;
   buyerName: string; sellerName: string; recordedAt: string;
   sourceModifiedAt?: string | null; percentTransferred?: number | null;
+  entityAddress?: PartyAddress | null;
 }
 
 async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
@@ -495,7 +531,11 @@ async function upsertDeeds(env: Env, rows: DeedRec[], prov: Provenance): Promise
   if (usable.length === 0) return { ingested: 0, skipped };
 
   const resolver = new BulkResolver(env);
-  await resolver.warm(usable, usable.map((r) => r.buyerName));
+  await resolver.warm(
+    usable,
+    usable.map((r) => r.buyerName),
+    usable.map((r) => ({ name: r.buyerName, address: r.entityAddress, seenAt: r.sourceModifiedAt }))
+  );
 
   const ready = usable.filter((r) => resolver.property(r));
   skipped += usable.length - ready.length;
@@ -536,7 +576,7 @@ interface LoanRec extends AddressRec {
   docNumber: string; lenderName: string; lenderType?: string | null; principal: number;
   ratePct?: number | null; originatedAt: string; termMonths?: number | null;
   maturityDate?: string | null; borrowerName: string;
-  sourceModifiedAt?: string | null;
+  sourceModifiedAt?: string | null; entityAddress?: PartyAddress | null;
 }
 
 async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise<{ ingested: number; skipped: number }> {
@@ -546,7 +586,11 @@ async function upsertLoans(env: Env, rows: LoanRec[], prov: Provenance): Promise
   if (usable.length === 0) return { ingested: 0, skipped };
 
   const resolver = new BulkResolver(env);
-  await resolver.warm(usable, usable.map((r) => r.borrowerName));
+  await resolver.warm(
+    usable,
+    usable.map((r) => r.borrowerName),
+    usable.map((r) => ({ name: r.borrowerName, address: r.entityAddress, seenAt: r.sourceModifiedAt }))
+  );
 
   const ready = usable.filter((r) => resolver.property(r));
   skipped += usable.length - ready.length;
@@ -619,6 +663,7 @@ async function upsertPermits(env: Env, rows: PermitRec[], prov: Provenance): Pro
 interface LienRec extends AddressRec {
   docNumber: string; lienType?: string | null; claimant: string; amount: number;
   filedAt: string; ownerName: string; sourceModifiedAt?: string | null;
+  entityAddress?: PartyAddress | null;
 }
 
 const LIEN_TYPES = new Set(["mechanics", "tax", "hoa", "judgment", "lis_pendens", "violation", "auction"]);
@@ -630,7 +675,11 @@ function makeLienUpserter(defaultType: string) {
     if (usable.length === 0) return { ingested: 0, skipped };
 
     const resolver = new BulkResolver(env);
-    await resolver.warm(usable, usable.map((r) => r.ownerName));
+    await resolver.warm(
+      usable,
+      usable.map((r) => r.ownerName),
+      usable.map((r) => ({ name: r.ownerName, address: r.entityAddress, seenAt: r.sourceModifiedAt }))
+    );
 
     const ready = usable.filter((r) => resolver.property(r));
     skipped += usable.length - ready.length;

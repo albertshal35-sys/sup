@@ -29,7 +29,11 @@ CREATE TABLE IF NOT EXISTS entities (
   state            TEXT,                        -- registration state
   formation_date   TEXT,
   registered_agent TEXT,
-  mailing_address  TEXT,
+  mailing_address  TEXT,                        -- as stated by the party on a recorded instrument
+  mailing_city     TEXT,
+  mailing_state    TEXT,
+  mailing_zip      TEXT,
+  mailing_seen_at  TEXT,                        -- revision that supplied the address
   principal_name   TEXT,                        -- skip-traced managing member
   -- rolling 36-month performance snapshot (denormalized by nightly job)
   flips_36mo       INTEGER NOT NULL DEFAULT 0,

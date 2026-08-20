@@ -183,6 +183,24 @@ Note the borough coverage baked into the data: the guide lists borough
 codes 1–4 (Manhattan, Bronx, Brooklyn, Queens) only. Staten Island records
 with the Richmond County Clerk, which is why it needs scrape mode.
 
+**What is and isn't consumed.** ACRIS publishes ten record datasets plus
+five code tables. These connectors read the Real Property side:
+
+| Dataset | Id | Used |
+| --- | --- | --- |
+| Real Property Master | `bnx9-e6tj` | yes — type, amounts, dates, revision markers, percent transferred |
+| Real Property Legals | `8h5j-fqxa` | yes — BBL, address, easement/air-rights flags, property type |
+| Real Property Parties | `636b-3b5g` | yes — names **and** mailing addresses |
+| Real Property References | `pwkr-dpni` | yes, for satisfactions (which mortgage a payoff discharges) |
+| Real Property Remarks | `9p4w-7npp` | **no** — free-text remarks per document, currently unread |
+| Personal Property (5 datasets) | `sv7x-dduq` et al. | **no** — the UCC / Federal Liens class; in ACRIS this is essentially co-op share loans (see the UCC note below) |
+| Document Control Codes | `7isb-wh4c` | yes — doc-type labels and per-type party roles |
+| Property Type / State / Country / UCC Collateral codes | `94g4-w6xz` et al. | **no** — label lookups for codes we currently store raw or not at all |
+
+Master fields deliberately skipped: the pre-ACRIS reel year/number/page
+(microfilm references for pre-1966 records) and `recorded_borough`, which is
+redundant with the borough on the Legals row we already join.
+
 **On API versions:** these connectors use the SODA 2.1 `/resource/{id}.json`
 endpoints, which need no credentials (an app token only raises the throttle)
 and accept an unbounded `$limit`. There is also a SODA 3 endpoint
@@ -255,6 +273,23 @@ actually see:
   publishes a Party1/Party2 role name per document type, so the mechanic's
   lien / lis pendens / tax lien shaper reads which side is the owner and
   which is the claimant rather than assuming.
+
+- **A corrected document appears more than once.** Per the Real Property
+  Master data dictionary: documents are "uniquely identified by both the
+  document id and CRFN fields; however to find the most current version of
+  the index data for the document, one must find the record with the most
+  recent good through date... some documents may have more than one." When
+  DOF corrects a document, *all* of its index data is re-published under a
+  new good-through date — in Master and in every companion dataset. The
+  adapter collapses each document to its current revision before shaping
+  records, so a correction does not become a duplicate deed, an inflated
+  parcel count, or party names merged across revisions.
+
+- **Party mailing addresses are collected.** The Parties dataset carries
+  Address Line 1/2, City, State and Zip for every party. That address is
+  what the borrowing entity itself put on a recorded instrument, and for an
+  LLC with no other public footprint it is often the only contact detail
+  that exists. It lands on `entities.mailing_*` and costs no extra requests.
 
 - **Get a Socrata app token.** Paste it into the connector's API-key field.
   Socrata throttles token-less callers through a shared per-IP pool; with a
