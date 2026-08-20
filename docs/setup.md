@@ -183,6 +183,46 @@ Note the borough coverage baked into the data: the guide lists borough
 codes 1–4 (Manhattan, Bronx, Brooklyn, Queens) only. Staten Island records
 with the Richmond County Clerk, which is why it needs scrape mode.
 
+**Parcel facts come from PLUTO.** Because the ACRIS join now produces a BBL,
+the city's tax-lot file (`64uk-42ks`) is a join rather than an integration.
+It fills lot and building area, unit count, floors, year built, zoning,
+building class, owner of record, assessed value and coordinates onto every
+parcel, bounded per run and re-synced quarterly (roughly the file's own
+cadence). It runs just before scoring, because the maturity feed reads the
+derived value.
+
+> **Assessed value is not market value.** NYC assesses Class 1 (1–3 family)
+> at **6%** of market and Classes 2–4 at **45%**. Using `assesstot` directly
+> would understate a house by roughly 16× and make every LTV meaningless —
+> a $500K note against a $3M home would read as 278% LTV. The raw figure is
+> stored as `assessed_value`, and `est_market_value` grosses it back up by
+> the ratio implied by the building class. That is an **estimate for ranking
+> leads, not an appraisal**: assessed values lag the market and carry caps
+> and exemptions. Where the building class is unknown the value stays null
+> and scoring simply drops the equity term rather than guessing.
+
+**Rate intel is derived, not recorded — and is the least proven part of the
+pipeline.** ACRIS publishes an *index*: doc type, amount, dates, parties,
+parcel. It does not publish interest rates. So any rate shown is read out of
+a recorded instrument and carries `rate_source` and `rate_confidence`
+alongside it. Two things to be clear-eyed about:
+
+- The enrichment renders the ACRIS document page for a note and parses the
+  text, preferring a rate its own clause qualifies (`11.25% per annum`) over
+  one qualified as something else (`24% upon default`, `5% late charge`).
+  Picking the wrong percentage is worse than picking none, so a rate whose
+  clause carries default/penalty language is discarded rather than ranked.
+- **The detail page carries the index; the rate usually lives in the
+  document image behind it.** Expect a low hit rate until that image path is
+  confirmed, and treat `no_rate_stated` as the normal outcome rather than a
+  fault. Point the connector's field-map `docUrlTemplate` (with `{doc}` for
+  the document id) at whatever URL does yield instrument text — no code
+  change needed.
+
+Enrichment is bounded to the top few open maturity leads per sweep, like
+contact enrichment: each one is a headless browser render plus a model call,
+and a rate only matters for a note you are about to quote against.
+
 **What is and isn't consumed.** ACRIS publishes ten record datasets plus
 five code tables. These connectors read the Real Property side:
 
@@ -193,6 +233,7 @@ five code tables. These connectors read the Real Property side:
 | Real Property Parties | `636b-3b5g` | yes — names **and** mailing addresses |
 | Real Property References | `pwkr-dpni` | yes, for satisfactions (which mortgage a payoff discharges) |
 | Real Property Remarks | `9p4w-7npp` | **no** — free-text remarks per document, currently unread |
+| PLUTO (tax lot facts) | `64uk-42ks` | yes — joined on BBL for parcel facts and assessed value |
 | Personal Property (5 datasets) | `sv7x-dduq` et al. | **no** — the UCC / Federal Liens class; in ACRIS this is essentially co-op share loans (see the UCC note below) |
 | Document Control Codes | `7isb-wh4c` | yes — doc-type labels and per-type party roles |
 | Property Type / State / Country / UCC Collateral codes | `94g4-w6xz` et al. | **no** — label lookups for codes we currently store raw or not at all |

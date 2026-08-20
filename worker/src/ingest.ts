@@ -40,6 +40,7 @@ import { acrisCapable, acrisFetch, isAcrisMaster, type PartyAddress } from "./ac
 import { evaluateCustomSignals } from "./signals";
 import { generateMergeSuggestions } from "./resolution";
 import { syncPluto } from "./pluto";
+import { enrichTopRates } from "./rate";
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 2000, 8000];
@@ -68,6 +69,8 @@ export interface ConnectorCfg {
     map?: Record<string, string>;
     /** ACRIS only: documents to read per window in one run. */
     docBudget?: number;
+    /** Rate intel: URL for one recorded document, with `{doc}` for the id. */
+    docUrlTemplate?: string;
   } | null;
 }
 
@@ -1154,6 +1157,17 @@ export async function runPipelineTail(env: Env): Promise<void> {
     skipped: 0,
     checksum: null,
   }));
+
+  // Rate intel last, and deliberately tiny: each one is a headless render
+  // plus a model call, and it only matters for a note about to be quoted
+  // against. Best-effort — this reads a source outside the open-data
+  // portals and must never take the sweep down with it.
+  const loanCfg = await getConnectorConfig(env, "county_loans");
+  await runWithAudit(env, "rate_intel", async () => ({
+    ingested: await enrichTopRates(env, 5, loanCfg.fieldMap?.docUrlTemplate ?? null),
+    skipped: 0,
+    checksum: null,
+  })).catch(() => {});
 
   await maybeSendDigest(env);
 }

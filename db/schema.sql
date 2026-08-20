@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS loans (
   lender_type    TEXT NOT NULL DEFAULT 'private' CHECK (lender_type IN ('private','hard_money','bank','credit_union','seller')),
   principal      INTEGER NOT NULL,
   rate_pct       REAL,
+  rate_source    TEXT,                           -- how the rate was obtained (see migration 0014)
+  rate_confidence REAL,                          -- 0-1
+  rate_checked_at TEXT,
   originated_at  TEXT NOT NULL,
   term_months    INTEGER,                        -- typical private note: 12
   maturity_date  TEXT,                           -- explicit if recorded, else originated + term
