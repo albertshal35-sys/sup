@@ -9,9 +9,9 @@ need capital.
 
 | Feed | Trigger logic |
 | --- | --- |
-| **Upcoming Maturity Sniffer** | Active private/hard-money notes originated **8–10 months ago** → refi window opening |
+| **Upcoming Maturity Sniffer** | Active private/hard-money notes originated **8–10 months ago** → refi window opening, ranked by **equity/LTV** against the whole recorded debt stack |
 | **Cash-Poor Trigger** | ≥2 **all-cash purchases in 60 days** → delayed-financing candidates rebuilding liquidity |
-| **Automated Borrower Resume** | 36-month deed + financing timeline, flips, margins, hold time, **cost-of-capital rate intel** (last/avg/highest rate paid — quote below it to win), skip-traced contacts |
+| **Automated Borrower Resume** | 36-month deed + financing timeline, flips, margins, hold time, **cost-of-capital rate intel** (last/avg/highest rate paid — quote below it to win; rates are *derived* from recorded instruments and carry a confidence, since ACRIS itself publishes no rate), skip-traced contacts |
 | **Permit-to-Social Matching** | Ground-up/structural permits ≥$250K, matched to registered LLC + principal contact info |
 | **Contractor Lien Monitoring** | Fresh mechanics liens (≤21 days) → frozen draws, rescue-capital opportunities |
 | **Pipeline CRM** | Five-stage lead board (Watching → Outreach → Term Sheet → Funded/Lost) with notes, follow-up dates, activity trail, and deal-size rollups |
@@ -21,7 +21,7 @@ need capital.
 - **Single Worker deploy** — one Cloudflare Worker serves the built React frontend as static assets **and** the `/api/*` edge API. One URL, one `npm run deploy`.
 - **Frontend** — React 18 + TypeScript + Tailwind (dual-theme design system, bento grid, custom component kit, Zustand state, ⌘K palette, drag-and-drop pipeline).
 - **Database** — **Cloudflare D1**; schema managed by migrations in `worker/migrations/` (applied automatically on merge by `.github/workflows/deploy.yml`). Materialized `triggers` table for O(1) feed reads; `principals`/`entity_principals` model the cross-LLC borrower graph.
-- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. Connectors are configured from the in-app admin settings (enable, vendor URL, AES-GCM-encrypted API key), retried 3× with backoff, audited in `ingestion_runs`, and idempotent on re-run.
+- **Ingestion** — Worker **cron `0 11 * * 1-5`** (daily, weekdays): county deeds/loans → permits → liens → skip-trace → scoring. NYC ACRIS (~17M recorded documents) is joined natively across Master/Legals/Parties/References, parcel-keyed by BBL, and read under an explicit per-window document budget (default 5,000, fetched in a single request — SoDA 2.1 sets no `$limit` ceiling). A window that outgrows the budget says so, and the backfill resumes exactly where it stopped rather than skipping ahead. Writes are batched, so ingesting a window costs a few hundred D1 calls instead of ~4 per row. ACRIS republishes corrected documents monthly — every dataset re-publishes the whole document under a new good-through date — so each document is collapsed to its current revision, catch-up pulls filter on `modified_date`, and upserts apply the newer revision rather than ignoring a document number already on file. Party mailing addresses ride along onto `entities`. **PLUTO** (`64uk-42ks`) joins on the same BBL key to add lot/building area, units, year built, zoning, owner of record and assessed value — grossed up by NYC's statutory assessment ratio into an estimated market value, which is what makes equity and LTV meaningful. Connectors are configured from the in-app admin settings (enable, vendor URL, AES-GCM-encrypted API key), retried 3× with backoff, audited in `ingestion_runs`, and idempotent on re-run.
 - **Data modes** — `demo` (seeded sample data, default) vs `live` (only ingested records). Toggle in Settings; purge sample rows once live.
 
 ## Develop
@@ -30,6 +30,7 @@ need capital.
 npm install
 npm run dev            # UI on :5173 (falls back to bundled demo data)
 npm run worker:dev     # API on :8787 (optional; UI proxies /api → :8787)
+npm test               # worker unit tests (vitest); also gates CI deploys
 ```
 
 ## Provision & deploy

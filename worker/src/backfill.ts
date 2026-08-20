@@ -1,13 +1,18 @@
 /**
- * Historical backfill — walks a connector's source backwards month by month
- * to 36 months so borrower resumes and rate history are complete, not just
+ * Historical backfill — walks a connector's source backwards to 36 months
+ * so borrower resumes and rate history are complete, not just
  * complete-from-deploy-day.
  *
  * Fully autonomous: click Start once and a 10-minute background cron tick
  * advances every running crawl until it reaches -36 months — no further
- * clicks. Free-tier friendly: bounded month-window chunks with the cursor
+ * clicks. Free-tier friendly: bounded window chunks with the cursor
  * persisted in `backfill_state`, so pacing never brushes the daily write
  * budget. Only API-mode sources can backfill (a scraped page has no history).
+ *
+ * The cursor moves by however much of a window was actually read, not by a
+ * fixed step: a high-volume source whose window saturates the pull budget
+ * resumes from its oldest returned record, so a bounded budget slows the
+ * crawl instead of punching holes in it.
  */
 
 import type { Env } from "./index";
@@ -18,17 +23,74 @@ import {
   getMarkets,
   isSocrataUrl,
   RECORD_CONNECTORS,
+  type ConnectorCfg,
 } from "./ingest";
 import { acrisCapable, isAcrisMaster } from "./acris";
 import { rescoreTriggers } from "./scoring";
 
 export const BACKFILL_MONTHS = 36;
 const CHUNKS_PER_CRON = 3; // running crawls advanced per background tick
+const ACRIS_CHUNK_DAYS = 14; // ACRIS window per chunk (see chunkStart)
 
 function monthShift(iso: string, months: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCMonth(d.getUTCMonth() + months);
   return d.toISOString().slice(0, 10);
+}
+
+function dayShift(iso: string, days: number): string {
+  return new Date(new Date(`${iso}T00:00:00Z`).getTime() + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * Window size for one chunk. ACRIS walks in shorter windows than other
+ * sources because NYC records five figures of documents a month. Two weeks
+ * of one document class sits comfortably inside the default 5,000-document
+ * pull budget, so most chunks complete their window outright; anything that
+ * does overflow is resumed, not skipped (see below).
+ */
+function chunkStart(cfg: ConnectorCfg, to: string): string {
+  return isAcrisMaster(cfg.baseUrl) && acrisCapable(cfg.id) ? dayShift(to, -ACRIS_CHUNK_DAYS) : monthShift(to, -1);
+}
+
+/**
+ * Where the crawl's cursor lands after one chunk — the whole correctness
+ * argument for the backfill, kept as a pure function so it can be reasoned
+ * about (and tested) on its own.
+ *
+ * A window that saturated the pull budget was only read back as far as its
+ * oldest returned record, so the cursor resumes there rather than stepping
+ * over the remainder: the crawl advances more slowly but never leaves a
+ * hole. `+1 day` because the cursor is date-granular and that day was read
+ * only in part — the overlap re-reads at most one day, which the
+ * doc-number upserts already ignore.
+ *
+ * `stalled` marks the one case that genuinely loses records: a single day
+ * holding more than one pull can read, or rows with no usable date to
+ * resume from. The crawl steps off it so it cannot spin, and says so.
+ */
+export function advanceCursor(input: {
+  /** Newest bound of the window just read. */
+  to: string;
+  /** Oldest bound the chunk intended to reach. */
+  from: string;
+  /** Where the whole crawl stops. */
+  target: string;
+  truncated: boolean;
+  /** Oldest date the pull actually reached, when it was cut short. */
+  resumeCursor: string | null;
+}): { next: string; stalled: boolean; done: boolean } {
+  const { to, from, target, truncated, resumeCursor } = input;
+  let next = from;
+  let stalled = false;
+  if (truncated) {
+    const resume = resumeCursor ? dayShift(resumeCursor, 1) : null;
+    if (resume && resume < to) next = resume;
+    else { next = dayShift(to, -1); stalled = true; }
+  }
+  return { next, stalled, done: next <= target };
 }
 
 export async function backfillEligible(env: Env, id: string): Promise<boolean> {
@@ -55,7 +117,7 @@ export async function startBackfill(env: Env, id: string): Promise<boolean> {
   return true;
 }
 
-/** Pull one month-window chunk for a running backfill. */
+/** Pull one date-window chunk for a running backfill. */
 export async function runBackfillChunk(env: Env, id: string): Promise<{ done: boolean; ingested: number; cursor?: string }> {
   const state = await env.DB.prepare(
     "SELECT cursor_date, target_date FROM backfill_state WHERE connector = ?1 AND status = 'running'"
@@ -73,7 +135,8 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
   }
 
   const to = state.cursor_date;
-  const from = monthShift(to, -1) < state.target_date ? state.target_date : monthShift(to, -1);
+  const step = chunkStart(cfg, to);
+  const from = step < state.target_date ? state.target_date : step;
 
   // Log through ingestion_runs like every other connector run — otherwise
   // the Data Pipeline card, per-connector "last run", and /api/health stay
@@ -90,12 +153,30 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
   try {
     const markets = await getMarkets(env);
     const result = await acquireAndIngest(env, cfg, markets, { from, to });
-    const done = from <= state.target_date;
+
+    const { next, stalled, done } = advanceCursor({
+      to, from, target: state.target_date,
+      truncated: Boolean(result.truncated), resumeCursor: result.resumeCursor ?? null,
+    });
     await env.DB.prepare(
-      `UPDATE backfill_state SET cursor_date = ?1, status = ?2, rows_total = rows_total + ?3, updated_at = datetime('now')
-       WHERE connector = ?4`
+      // COALESCE, not assignment: a budget stall means one day was read
+      // only in part and the crawl stepped past the remainder. That's the
+      // one case where data is actually missed, so the notice has to
+      // survive the rest of the crawl instead of being cleared by the next
+      // healthy chunk. `Start backfill` resets it.
+      `UPDATE backfill_state SET cursor_date = ?1, status = ?2, rows_total = rows_total + ?3,
+         error = COALESCE(?4, error), updated_at = datetime('now')
+       WHERE connector = ?5`
     )
-      .bind(from, done ? "done" : "running", result.ingested, id)
+      .bind(
+        next,
+        done ? "done" : "running",
+        result.ingested,
+        stalled
+          ? `coverage gap: ${to} held more documents than one pull could read, so the earliest part of that day was skipped. Raise this source's field-map docBudget, then re-run the backfill to recover it.`
+          : null,
+        id
+      )
       .run();
     await env.DB.prepare(
       `UPDATE ingestion_runs SET finished_at = datetime('now'), status = 'ok',
@@ -105,7 +186,7 @@ export async function runBackfillChunk(env: Env, id: string): Promise<{ done: bo
       .run();
     // Materialize triggers as backfilled history reaches the signal windows.
     if (result.ingested > 0) await rescoreTriggers(env);
-    return { done, ingested: result.ingested, cursor: from };
+    return { done, ingested: result.ingested, cursor: next };
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err).slice(0, 300);
     await env.DB.prepare(

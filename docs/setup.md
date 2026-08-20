@@ -172,13 +172,170 @@ Connectors come **pre-filled with real endpoints** (seeded by migrations
 | UCC filings | `appext20.dos.ny.gov/pls/ucc_public/web_search.main_frame` | NY DOS UCC search (scrape; form-driven, see caveat below) |
 
 **ACRIS is joined natively:** the pipeline automatically joins Master
-(amounts/dates) with Legals (`8h5j-fqxa`, addresses) and Parties
-(`636b-3b5g`, names) by `document_id`, producing complete records from the
-free city APIs — no field map needed for deeds/loans/satisfactions, whose
-document types default to `DEED` / `MTGE`+`AGMT` / `SAT`. Lenders are
-auto-classified bank vs private by name, and all-cash purchases are
-detected by reconciling deeds against mortgage recordings on the same
-parcel.
+(amounts/dates) with Legals (`8h5j-fqxa`, addresses + borough/block/lot),
+Parties (`636b-3b5g`, names) and — for satisfactions — References
+(`pwkr-dpni`, document-to-document cross refs) by `document_id`, producing
+complete records from the free city APIs. The record layouts, code tables
+and publishing model are specified in DOF's *ACRIS OpenData Extract Guide*
+(v1.0), which is the reference for everything in this section.
+
+Note the borough coverage baked into the data: the guide lists borough
+codes 1–4 (Manhattan, Bronx, Brooklyn, Queens) only. Staten Island records
+with the Richmond County Clerk, which is why it needs scrape mode.
+
+**Parcel facts come from PLUTO.** Because the ACRIS join now produces a BBL,
+the city's tax-lot file (`64uk-42ks`) is a join rather than an integration.
+It fills lot and building area, unit count, floors, year built, zoning,
+building class, owner of record, assessed value and coordinates onto every
+parcel, bounded per run and re-synced quarterly (roughly the file's own
+cadence). It runs just before scoring, because the maturity feed reads the
+derived value.
+
+> **Assessed value is not market value.** NYC assesses Class 1 (1–3 family)
+> at **6%** of market and Classes 2–4 at **45%**. Using `assesstot` directly
+> would understate a house by roughly 16× and make every LTV meaningless —
+> a $500K note against a $3M home would read as 278% LTV. The raw figure is
+> stored as `assessed_value`, and `est_market_value` grosses it back up by
+> the ratio implied by the building class. That is an **estimate for ranking
+> leads, not an appraisal**: assessed values lag the market and carry caps
+> and exemptions. Where the building class is unknown the value stays null
+> and scoring simply drops the equity term rather than guessing.
+
+**Rate intel is derived, not recorded — and is the least proven part of the
+pipeline.** ACRIS publishes an *index*: doc type, amount, dates, parties,
+parcel. It does not publish interest rates. So any rate shown is read out of
+a recorded instrument and carries `rate_source` and `rate_confidence`
+alongside it. Two things to be clear-eyed about:
+
+- The enrichment renders the ACRIS document page for a note and parses the
+  text, preferring a rate its own clause qualifies (`11.25% per annum`) over
+  one qualified as something else (`24% upon default`, `5% late charge`).
+  Picking the wrong percentage is worse than picking none, so a rate whose
+  clause carries default/penalty language is discarded rather than ranked.
+- **The detail page carries the index; the rate usually lives in the
+  document image behind it.** Expect a low hit rate until that image path is
+  confirmed, and treat `no_rate_stated` as the normal outcome rather than a
+  fault. Point the connector's field-map `docUrlTemplate` (with `{doc}` for
+  the document id) at whatever URL does yield instrument text — no code
+  change needed.
+
+Enrichment is bounded to the top few open maturity leads per sweep, like
+contact enrichment: each one is a headless browser render plus a model call,
+and a rate only matters for a note you are about to quote against.
+
+**What is and isn't consumed.** ACRIS publishes ten record datasets plus
+five code tables. These connectors read the Real Property side:
+
+| Dataset | Id | Used |
+| --- | --- | --- |
+| Real Property Master | `bnx9-e6tj` | yes — type, amounts, dates, revision markers, percent transferred |
+| Real Property Legals | `8h5j-fqxa` | yes — BBL, address, easement/air-rights flags, property type |
+| Real Property Parties | `636b-3b5g` | yes — names **and** mailing addresses |
+| Real Property References | `pwkr-dpni` | yes, for satisfactions (which mortgage a payoff discharges) |
+| Real Property Remarks | `9p4w-7npp` | **no** — free-text remarks per document, currently unread |
+| PLUTO (tax lot facts) | `64uk-42ks` | yes — joined on BBL for parcel facts and assessed value |
+| Personal Property (5 datasets) | `sv7x-dduq` et al. | **no** — the UCC / Federal Liens class; in ACRIS this is essentially co-op share loans (see the UCC note below) |
+| Document Control Codes | `7isb-wh4c` | yes — doc-type labels and per-type party roles |
+| Property Type / State / Country / UCC Collateral codes | `94g4-w6xz` et al. | **no** — label lookups for codes we currently store raw or not at all |
+
+Master fields deliberately skipped: the pre-ACRIS reel year/number/page
+(microfilm references for pre-1966 records) and `recorded_borough`, which is
+redundant with the borough on the Legals row we already join.
+
+**On API versions:** these connectors use the SODA 2.1 `/resource/{id}.json`
+endpoints, which need no credentials (an app token only raises the throttle)
+and accept an unbounded `$limit`. There is also a SODA 3 endpoint
+(`/api/v3/views/{id}/query.json`) which **requires authentication** — it is a
+different query interface, not a larger one, so it buys nothing here. No field map is needed for
+deeds/loans/satisfactions, whose document types default to `DEED` /
+`MTGE`+`AGMT` / `SAT`. Lenders are auto-classified bank vs private by name,
+and all-cash purchases are detected by reconciling deeds against mortgage
+recordings on the same parcel.
+
+Three details worth knowing, because they decide how much the feeds can
+actually see:
+
+- **Parcels are keyed by BBL.** Every joined record carries the borough-
+  block-lot key from Legals as its APN, so a deed, a mortgage, a lien and a
+  permit on one parcel converge on a single property row instead of
+  fragmenting on address spelling ("123 MAIN STREET" vs "123 Main St"). This
+  is what makes cash-purchase detection, borrower resumes, and the maturity
+  feed line up. A document covering several parcels (blanket mortgage,
+  assemblage) is bound to its primary parcel — easement and air-rights rows
+  are never chosen over a real taxable lot.
+- **Satisfactions match their mortgage by reference, not by name.** The
+  References dataset resolves which document a `SAT` discharges (by document
+  id, or by CRFN), so a payoff closes the right loan. Only when ACRIS
+  publishes no reference does it fall back to the lender+borrower name
+  match.
+- **Windows are read under a document budget, in as few requests as
+  possible.** SoDA 2.1 `/resource/` endpoints set **no `$limit` ceiling**
+  (the 50,000 cap belongs to SoDA 2.0), so a pull asks for its whole budget
+  in a single Master request — the default 5,000 documents costs one
+  request, not ten. Each request asks for one row *more* than it keeps: if
+  that probe row comes back, the window provably holds more than the budget,
+  so "truncated" is a fact rather than a guess. When a window does overflow,
+  the historical backfill resumes from the oldest record the pull reached
+  instead of stepping over the remainder — a bounded budget slows the crawl
+  down, it does not punch holes in it. Raise a source's `docBudget` in its
+  field map to read more per pull.
+
+  At realistic NYC volume the budget rarely binds: two weeks of one document
+  class runs well under 5,000, so a 36-month backfill completes in ~79
+  chunks without truncating at all.
+
+- **ACRIS republishes corrections, and the pipeline applies them.** Per the
+  DOF *ACRIS OpenData Extract Guide* (v1.0), each monthly extract contains
+  every document "either recorded **or corrected** in the previous month",
+  Master carries a **Modified Date** meaning "recorded or index data last
+  corrected", and "the records with the latest good through date are the
+  current records". So a document is not write-once: amounts, dates,
+  parties and parcels can change after the fact.
+
+  Two consequences are wired in. Routine catch-up pulls filter on
+  `modified_date`, not `recorded_datetime` — a 2019 deed corrected last
+  month still carries its 2019 recording date, so a recorded-date filter
+  would never surface it. And record upserts compare `source_modified_at`
+  and apply the newer revision, instead of ignoring anything whose document
+  number is already on file. The historical backfill still walks
+  `recorded_datetime`, because there it is deliberately reading recording
+  history.
+
+- **Expect monthly, not daily, movement.** The extract is regenerated once a
+  month. Daily pulls are cheap no-ops between publications and then take a
+  batch when one lands — a run of quiet days is the source behaving
+  normally, not a broken connector.
+
+- **Partial-interest deeds are flagged, not counted as sales.** Master's
+  *Percentage Transferred* rides along on deed records, so a conveyance of a
+  fractional interest can be told apart from a whole-property sale.
+
+- **Lien party roles come from the code table.** Document Control Codes
+  publishes a Party1/Party2 role name per document type, so the mechanic's
+  lien / lis pendens / tax lien shaper reads which side is the owner and
+  which is the claimant rather than assuming.
+
+- **A corrected document appears more than once.** Per the Real Property
+  Master data dictionary: documents are "uniquely identified by both the
+  document id and CRFN fields; however to find the most current version of
+  the index data for the document, one must find the record with the most
+  recent good through date... some documents may have more than one." When
+  DOF corrects a document, *all* of its index data is re-published under a
+  new good-through date — in Master and in every companion dataset. The
+  adapter collapses each document to its current revision before shaping
+  records, so a correction does not become a duplicate deed, an inflated
+  parcel count, or party names merged across revisions.
+
+- **Party mailing addresses are collected.** The Parties dataset carries
+  Address Line 1/2, City, State and Zip for every party. That address is
+  what the borrowing entity itself put on a recorded instrument, and for an
+  LLC with no other public footprint it is often the only contact detail
+  that exists. It lands on `entities.mailing_*` and costs no extra requests.
+
+- **Get a Socrata app token.** Paste it into the connector's API-key field.
+  Socrata throttles token-less callers through a shared per-IP pool; with a
+  token you get roughly 1,000 requests per rolling hour, which is what makes
+  sustained crawling at this volume workable. It is free to register.
 
 **Mechanic's liens, lis pendens, and tax liens are recorded ACRIS document
 types too** — not scrapes. Their `doc_type` filters are never guessed:
@@ -245,9 +402,16 @@ the vendor base URL + API key. Keys are AES-GCM-encrypted at rest using the
   caps schedules per account on the Free plan); the tick computes the sweep
   boundaries in code. A sweep only *seeds* a pull queue; the
   10-minute background tick drains a couple of connectors per invocation.
-  (Workers cap upstream fetches per invocation — 50 on the Free plan, and
-  one ACRIS join costs ~9 — so running everything in one invocation would
-  silently fail partway. Spreading pulls across ticks keeps every connector
+  (Workers meter two budgets per invocation: **external** fetches — 50 on
+  the Free plan — and calls to Cloudflare services like D1, capped at 1,000
+  on Free. One ACRIS join costs `1 + 2 × ceil(docs / 250)` external
+  requests, so the default 5,000-document budget costs 41, just inside the
+  external cap; running every connector in one invocation would blow it,
+  which is why pulls are spread across ticks. Raising `docBudget` raises
+  that cost linearly — 6,000 documents is about the Free-plan ceiling for a
+  single connector. The D1 side is batched (see `BulkResolver` in
+  `ingest.ts`), so ingesting those 5,000 records costs a few hundred
+  service calls rather than the ~20,000 a per-row path would. Spreading pulls across ticks keeps every connector
   inside the budget no matter how many are enabled.) Scoring, custom
   signals, entity resolution, and the digest run when the queue drains.
 - **Historical backfill** — Settings → Historical backfill, or automatic:
@@ -313,5 +477,8 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | Records missing that you expected | Check Settings → Data quality — they may be quarantined (outside markets, failed a sanity gate, or failed grounding) |
 | Nothing populates at all, connectors look configured | Connectors are **disabled by default** — use **Activate all free sources** (Settings → Data sources), which enables, maps, backfills, and queues everything in one click |
 | A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
+| Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `docBudget` and re-run the backfill to recover the day |
+| ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `docBudget` to trade subrequests for speed |
+| ACRIS connector returns 0 rows for days at a time | Expected. The extract is regenerated monthly, so daily pulls are no-ops between publications and take a batch when one lands |
 | ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
 | Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |

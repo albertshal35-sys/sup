@@ -6,7 +6,7 @@ import {
   RECORD_CONNECTORS, getConnectorConfig, isSocrataUrl,
   getMarkets, socrataFetch, vendorFetch, vendorUrl, connectorAuthHeaders,
 } from "./ingest";
-import { acrisCapable, acrisFetch, discoverDocTypes, isAcrisMaster, resolveAcrisDocTypes } from "./acris";
+import { acrisCapable, acrisDocBudget, acrisFetch, discoverDocTypes, isAcrisMaster, resolveAcrisDocTypes } from "./acris";
 import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
@@ -687,9 +687,27 @@ route("POST", "/api/admin/connectors/:id/test", async (_req, env, params) => {
         });
         if (resolved) push("Resolve doc types", true, `matched in Document Control Codes: ${resolved} (saved to field map)`);
       }
-      const r = await acrisFetch(env, cfg, w);
+      // Mirror the routine pull, which filters on modified_date so that
+      // corrections to older documents surface too.
+      const r = await acrisFetch(env, cfg, w, "modified_date");
       rows = r.rows;
-      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} · ${rows.length} joined record(s)`);
+      push("ACRIS join fetch", true, `window ${w.from} → ${w.to} on modified_date (recorded or corrected) · ${rows.length} joined record(s)`);
+      // Coverage is the thing an operator can't see from a row sample: say
+      // plainly whether this window was read to the end or cut off by the
+      // budget, and how to widen it.
+      push(
+        "ACRIS window coverage",
+        !r.truncated,
+        r.truncated
+          ? `read ${rows.length.toLocaleString()} document(s) back to ${r.oldestRecorded} and stopped at the ${acrisDocBudget(cfg).toLocaleString()}-document budget — the rest of this window is recovered by the historical backfill, which resumes where the pull stopped; raise field-map docBudget to read more per pull`
+          : `whole window read (${rows.length.toLocaleString()} of a ${acrisDocBudget(cfg).toLocaleString()}-document budget)`
+      );
+      const withBbl = rows.filter((row) => typeof row.apn === "string" && row.apn).length;
+      // Satisfactions are deliberately address-free (they discharge a loan,
+      // they don't describe a parcel), so a 0 there is correct, not a fault.
+      if (rows.length > 0 && cfg.id !== "satisfactions") {
+        push("ACRIS parcel keys (BBL)", withBbl > 0, `${withBbl}/${rows.length} record(s) carry a borough-block-lot parcel key`);
+      }
       if (rows.length === 0) push("Note", false, "0 rows in the last 45 days — ACRIS publishes with a multi-week lag; if this persists, run a backfill chunk (Settings → Historical backfill) which walks further back");
       try {
         const types = await discoverDocTypes(cfg, w);

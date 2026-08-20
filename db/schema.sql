@@ -29,7 +29,11 @@ CREATE TABLE IF NOT EXISTS entities (
   state            TEXT,                        -- registration state
   formation_date   TEXT,
   registered_agent TEXT,
-  mailing_address  TEXT,
+  mailing_address  TEXT,                        -- as stated by the party on a recorded instrument
+  mailing_city     TEXT,
+  mailing_state    TEXT,
+  mailing_zip      TEXT,
+  mailing_seen_at  TEXT,                        -- revision that supplied the address
   principal_name   TEXT,                        -- skip-traced managing member
   -- rolling 36-month performance snapshot (denormalized by nightly job)
   flips_36mo       INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +85,18 @@ CREATE TABLE IF NOT EXISTS properties (
   est_value     INTEGER,                         -- AVM estimate, whole dollars
   lat           REAL,
   lng           REAL,
+  -- PLUTO tax-lot facts, joined on BBL (see migration 0013)
+  lot_area          INTEGER,                     -- square feet
+  bldg_area         INTEGER,                     -- gross square feet
+  units_total       INTEGER,
+  num_floors        REAL,
+  bldg_class        TEXT,                        -- NYC building class, e.g. C4
+  zoning            TEXT,
+  owner_name        TEXT,                        -- owner of record per DOF
+  assessed_value    INTEGER,                     -- raw assesstot, NOT market value
+  est_market_value  INTEGER,                     -- assessed grossed up by assessment ratio
+  tax_class         TEXT,                        -- 1 | 2 | 4, derived from bldg_class
+  pluto_synced_at   TEXT,
   origin        TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   UNIQUE (apn, county, state)
 );
@@ -101,6 +117,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   seller_name  TEXT,
   recorded_at  TEXT NOT NULL,                    -- county recording date
   doc_number   TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
+  percent_transferred REAL,                      -- fractional interest conveyed, if reported
   source       TEXT NOT NULL DEFAULT 'county_recorder',
   origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id    TEXT,                             -- connector that produced the row
@@ -124,12 +142,16 @@ CREATE TABLE IF NOT EXISTS loans (
   lender_type    TEXT NOT NULL DEFAULT 'private' CHECK (lender_type IN ('private','hard_money','bank','credit_union','seller')),
   principal      INTEGER NOT NULL,
   rate_pct       REAL,
+  rate_source    TEXT,                           -- how the rate was obtained (see migration 0014)
+  rate_confidence REAL,                          -- 0-1
+  rate_checked_at TEXT,
   originated_at  TEXT NOT NULL,
   term_months    INTEGER,                        -- typical private note: 12
   maturity_date  TEXT,                           -- explicit if recorded, else originated + term
   lien_position  INTEGER NOT NULL DEFAULT 1,
   status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paid_off','defaulted','refinanced')),
   doc_number     TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
   source         TEXT NOT NULL DEFAULT 'county_recorder',
   origin         TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id      TEXT,
@@ -184,6 +206,7 @@ CREATE TABLE IF NOT EXISTS liens (
   filed_at     TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','released','disputed','foreclosing')),
   doc_number   TEXT,
+  source_modified_at TEXT,                       -- ACRIS Modified Date: recorded-or-corrected
   source       TEXT NOT NULL DEFAULT 'county_recorder',
   origin       TEXT NOT NULL DEFAULT 'live' CHECK (origin IN ('live','demo')),
   source_id    TEXT,
@@ -193,6 +216,9 @@ CREATE TABLE IF NOT EXISTS liens (
   ingested_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_liens_doc ON liens(doc_number) WHERE doc_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tx_modified    ON transactions(source_modified_at);
+CREATE INDEX IF NOT EXISTS idx_loans_modified ON loans(source_modified_at);
+CREATE INDEX IF NOT EXISTS idx_liens_modified ON liens(source_modified_at);
 CREATE INDEX IF NOT EXISTS idx_liens_filed ON liens(status, filed_at DESC);
 
 -- ------------------------------------------------------------
