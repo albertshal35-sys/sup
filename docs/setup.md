@@ -329,6 +329,17 @@ actually see:
   `recorded_datetime`, because there it is deliberately reading recording
   history.
 
+- **Signal windows follow publication, not the wall clock.** This matters
+  more than it sounds. The feeds ask questions like "liens filed in the last
+  21 days" — measured against *today*, that window can never match a source
+  publishing a month in arrears, and the pipeline looks healthy the whole
+  time because nothing is failing. Every window is therefore counted back
+  from each source's newest delivered record. A current source behaves
+  exactly as before; a lagging one keeps covering the same amount of real
+  data. Past 180 days a source is treated as stopped rather than lagging:
+  the window stops sliding and the staleness is reported instead of stale
+  records being dressed up as fresh leads.
+
 - **Expect monthly, not daily, movement.** The extract is regenerated once a
   month. Daily pulls are cheap no-ops between publications and then take a
   batch when one lands — a run of quiet days is the source behaving
@@ -507,6 +518,8 @@ npx wrangler tail --config worker/wrangler.toml   # live Worker logs
 | A tab (Maturities/Cash-Poor/Permits/Distress) is empty | Click **Diagnose** in Settings → Data sources — it states the exact reason per feed (missing table data, no records in the signal window, connector failed) |
 | Backfill shows a "coverage gap" warning | One day held more documents than a single pull could read, so its earliest part was skipped. Raise that source's field-map `docBudget` and re-run the backfill to recover the day |
 | ACRIS backfill is crawling slowly | Expected on high-volume document types: a saturated window resumes where it stopped rather than skipping ahead, so coverage stays complete. Raise `docBudget` to trade subrequests for speed |
+| Feeds are empty but every connector says healthy | Open **Settings → Pipeline health → Diagnose** and read the **Data coverage** panel. It reports what exists, how far behind each source is, how many rows each signal window actually reaches, and the top rejection reasons — the doctor above it only says whether connectors *ran* |
+| A market you configured matches nothing | The coverage panel names it. Boroughs and counties both work (`Brooklyn, NY` and `Kings, NY` are the same market), but a market that matches no stored records means every record outside the matched set is being quarantined on geography |
 | ACRIS connector returns 0 rows for days at a time | Expected. The extract is regenerated monthly, so daily pulls are no-ops between publications and take a batch when one lands |
 | ACRIS lien-family connector returns 0 rows | Doc-type filters resolve automatically from the city's code table on first pull; if resolution failed, *Test source* narrates why and lists the real codes to paste into the field-map *where* |
 | Tax lien connector looks quiet | It now reads **recorded** NYC/Federal tax liens from ACRIS (live). The DOF lien-*sale* list is frozen while NYC's lien sale is suspended — that dataset stays stale citywide |

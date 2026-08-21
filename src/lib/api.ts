@@ -534,6 +534,16 @@ export const admin = {
       feeds: Array<{ kind: string; ready: boolean; detail: string }>;
       openTriggers: number;
     }>("/pipeline/doctor"),
+  pipelineCoverage: () =>
+    adminFetch<{
+      dataMode: string;
+      markets: { configured: string[]; matched: Record<string, number>; unmatched: string[] };
+      counts: Record<string, number>;
+      sources: Array<{ source: string; newest: string | null; lagDays: number; stale: boolean }>;
+      windows: Array<{ signal: string; from: string; to: string; rowsInWindow: number }>;
+      quarantine: Array<{ reason: string; count: number }>;
+      notes: string[];
+    }>("/pipeline/coverage"),
   saveSettings: (patch: {
     dataMode?: "demo" | "live";
     markets?: string[];

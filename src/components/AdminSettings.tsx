@@ -502,6 +502,7 @@ const DOCTOR_LABELS: Record<string, string> = {
 };
 
 type DoctorReport = Extract<Awaited<ReturnType<typeof admin.pipelineDoctor>>, { ok: true }>["data"];
+type CoverageReport = Extract<Awaited<ReturnType<typeof admin.pipelineCoverage>>, { ok: true }>["data"];
 
 /**
  * One-click activation for every free NYC source + an honest per-tab
@@ -510,13 +511,18 @@ type DoctorReport = Extract<Awaited<ReturnType<typeof admin.pipelineDoctor>>, { 
 function PipelineDoctor({ onChanged }: { onChanged: () => void }) {
   const toast = useApp((s) => s.toast);
   const [report, setReport] = useState<DoctorReport | null>(null);
+  const [coverage, setCoverage] = useState<CoverageReport | null>(null);
   const [busy, setBusy] = useState<"activate" | "diagnose" | null>(null);
 
   const diagnose = async () => {
     setBusy("diagnose");
-    const res = await admin.pipelineDoctor();
-    if (res.ok) setReport(res.data);
-    else toast(`Diagnosis failed: ${res.error}`, "error");
+    // The doctor says whether connectors ran; coverage says whether anything
+    // usable came out and whether the signal windows can see it. Volume
+    // problems almost always live in the second one.
+    const [doc, cov] = await Promise.all([admin.pipelineDoctor(), admin.pipelineCoverage()]);
+    if (doc.ok) setReport(doc.data);
+    else toast(`Diagnosis failed: ${doc.error}`, "error");
+    if (cov.ok) setCoverage(cov.data);
     setBusy(null);
   };
 
@@ -600,6 +606,71 @@ function PipelineDoctor({ onChanged }: { onChanged: () => void }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {coverage && (
+        <div className="mt-3 border-t border-line pt-3">
+          <h5 className="text-2xs font-semibold uppercase tracking-wide text-tx3">Data coverage</h5>
+
+          {coverage.notes.length > 0 && (
+            <ul className="mt-1.5 space-y-1">
+              {coverage.notes.map((n) => (
+                <li key={n} className="flex gap-1.5 text-2xs text-warn">
+                  <span aria-hidden>!</span>
+                  <span>{n}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+            {Object.entries(coverage.counts).map(([k, v]) => (
+              <div key={k} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="truncate text-tx3">{k.replace(/([A-Z])/g, " $1").toLowerCase()}</span>
+                <span className="font-mono tabular-nums text-tx1">{v.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2.5 space-y-1">
+            <div className="text-2xs font-medium text-tx3">Source freshness</div>
+            {coverage.sources.map((s) => (
+              <div key={s.source} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="text-tx2">{s.source}</span>
+                <span className={s.stale ? "text-danger" : "text-tx3"}>
+                  {s.newest ? `newest ${s.newest} · ${s.lagDays}d behind` : "no live rows"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2.5 space-y-1">
+            <div className="text-2xs font-medium text-tx3">
+              Rows each signal window reaches <span className="text-tx3/70">(measured from each source&apos;s newest record, not today)</span>
+            </div>
+            {coverage.windows.map((w) => (
+              <div key={w.signal} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="text-tx2">{w.signal}</span>
+                <span className="text-tx3">
+                  <span className="font-mono tabular-nums text-tx1">{w.rowsInWindow.toLocaleString()}</span>
+                  {" "}in {w.from} → {w.to}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {coverage.quarantine.length > 0 && (
+            <div className="mt-2.5 space-y-1">
+              <div className="text-2xs font-medium text-tx3">Top rejection reasons</div>
+              {coverage.quarantine.map((q) => (
+                <div key={q.reason} className="flex items-baseline justify-between gap-2 text-2xs">
+                  <span className="min-w-0 flex-1 truncate text-tx2">{q.reason}</span>
+                  <span className="font-mono tabular-nums text-tx1">{q.count.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

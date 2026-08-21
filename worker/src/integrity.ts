@@ -41,11 +41,37 @@ function isPlausibleDate(s: unknown): boolean {
   return year >= 1900 && t <= Date.now() + 86_400_000; // 1-day clock skew
 }
 
-function inMarkets(rec: { county?: string; state?: string }, markets: string[]): boolean {
+/**
+ * NYC records by county, but everyone says the borough. ACRIS emits `Kings`,
+ * `New York`, `Queens`, `Bronx`, `Richmond`; an operator types "Brooklyn, NY".
+ * Without this mapping the market gate rejects every record with a reason
+ * that reads like the data is wrong rather than the setting, and the only
+ * visible symptom is an empty feed.
+ */
+const COUNTY_ALIASES: Record<string, string> = {
+  brooklyn: "kings",
+  manhattan: "new york",
+  "new york city": "new york",
+  nyc: "new york",
+  "staten island": "richmond",
+  bronx: "bronx",
+  queens: "queens",
+};
+
+/** "Brooklyn, NY" and "Kings, NY" reduce to the same key. */
+export function marketKey(county: string, state: string): string {
+  const c = county.trim().toLowerCase().replace(/\s+county$/, "");
+  return `${COUNTY_ALIASES[c] ?? c}, ${state.trim().toLowerCase()}`;
+}
+
+export function inMarkets(rec: { county?: string; state?: string }, markets: string[]): boolean {
   if (markets.length === 0) return true;
   if (!rec.county || !rec.state) return false;
-  const key = `${rec.county}, ${rec.state}`.toLowerCase();
-  return markets.some((m) => m.toLowerCase() === key);
+  const key = marketKey(rec.county, rec.state);
+  return markets.some((m) => {
+    const [c, st] = m.split(",");
+    return st ? marketKey(c, st) === key : false;
+  });
 }
 
 /**

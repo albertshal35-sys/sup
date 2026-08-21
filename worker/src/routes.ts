@@ -11,6 +11,7 @@ import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
 import { authConfigured, loginWithCode, verifySession } from "./auth";
+import { coverageReport } from "./coverage";
 import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, modelFor, recordShape, runModel } from "./ai";
 import { sendTestDigest } from "./alerts";
 import { dataQualitySummary } from "./integrity";
@@ -1181,6 +1182,12 @@ route("POST", "/api/admin/sources/activate-all", async (_req, env) => {
  * config/run/backfill state and checks each feed's data prerequisites
  * against what is actually in the database right now.
  */
+route("GET", "/api/admin/pipeline/coverage", async (_req, env) => {
+  // Complements the doctor: that answers "did the connectors run", this
+  // answers "did anything usable come out, and can the signals see it".
+  return json(await coverageReport(env), env);
+});
+
 route("GET", "/api/admin/pipeline/doctor", async (_req, env) => {
   const connectors: Array<Record<string, unknown>> = [];
   for (const id of CONNECTOR_IDS) {
