@@ -30,6 +30,7 @@
 
 import type { Env } from "./index";
 import { renderPageMarkdown, runModel, aiAvailable } from "./ai";
+import { RATE_SCHEMA } from "./schema";
 
 /** `{doc}` is replaced with the ACRIS document id. */
 export const DEFAULT_DOC_URL = "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id={doc}";
@@ -132,7 +133,7 @@ async function rateFromModel(env: Env, text: string): Promise<RateHit | null> {
         "Never return a default rate, late charge, or penalty rate. Do not explain.",
     },
     { role: "user", content: text.slice(0, 6000) },
-  ], 128);
+  ], { maxTokens: 128, schema: RATE_SCHEMA });
 
   try {
     const parsed = JSON.parse((reply.match(/\{[\s\S]*\}/) ?? [reply])[0]) as { ratePct?: unknown };

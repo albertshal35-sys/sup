@@ -616,6 +616,8 @@ export function SettingsView() {
   const [markets, setMarkets] = useState<string[]>(serverSettings?.markets ?? []);
   const [newMarket, setNewMarket] = useState("");
   const [gatewayId, setGatewayId] = useState(serverSettings?.aiGatewayId ?? "");
+  const [modelExtract, setModelExtract] = useState(serverSettings?.aiModelExtract ?? "");
+  const [modelProse, setModelProse] = useState(serverSettings?.aiModelProse ?? "");
   const [apiUp, setApiUp] = useState<boolean | null>(serverSettings ? true : null);
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -649,6 +651,8 @@ export function SettingsView() {
     }
     setMarkets(probe.settings.markets);
     setGatewayId(probe.settings.aiGatewayId);
+    setModelExtract(probe.settings.aiModelExtract);
+    setModelProse(probe.settings.aiModelProse);
     setAlertsEnabled(probe.settings.alertsEnabled);
     setAlertEmail(probe.settings.alertEmail);
     if (probe.settings.underwriting) setUw(probe.settings.underwriting);
@@ -1214,9 +1218,7 @@ export function SettingsView() {
         <div className="flex items-center gap-2 rounded-xl border border-line bg-raised/40 px-4 py-3">
           <Sparkles strokeWidth={1.75} className="h-4 w-4 shrink-0 text-violet" />
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold text-tx1">
-              Model: <span className="font-mono text-2xs">@cf/moonshotai/kimi-k2.6</span>
-            </div>
+            <div className="text-xs font-semibold text-tx1">Models</div>
             <div className="text-2xs text-tx3">
               {serverSettings?.aiEnabled
                 ? "Workers AI binding active."
@@ -1227,7 +1229,36 @@ export function SettingsView() {
             </div>
           </div>
         </div>
-        <div className="mt-2.5 flex max-w-md items-end gap-2">
+        <div className="mt-2.5 max-w-lg space-y-2">
+          <div>
+            <span className="text-2xs font-medium text-tx3">
+              Extraction model — scrape parsing, grounding checks, field mapping, rate reading
+            </span>
+            <TextField
+              value={modelExtract}
+              onChange={setModelExtract}
+              placeholder="@cf/google/gemma-4-26b-a4b-it"
+              disabled={offline}
+              className="mt-1"
+            />
+            <div className="mt-1 text-2xs text-tx3">
+              Nearly all token spend. Replies are schema-constrained, so a small model does the job —
+              and the integrity gates quarantine whatever it gets wrong.
+            </div>
+          </div>
+          <div>
+            <span className="text-2xs font-medium text-tx3">Writing model — borrower briefs and outreach drafts</span>
+            <TextField
+              value={modelProse}
+              onChange={setModelProse}
+              placeholder="@cf/moonshotai/kimi-k2.6"
+              disabled={offline}
+              className="mt-1"
+            />
+            <div className="mt-1 text-2xs text-tx3">A few calls a day, and a customer reads the output.</div>
+          </div>
+        </div>
+        <div className="mt-2.5 flex max-w-lg items-end gap-2">
           <div className="flex-1">
             <span className="text-2xs font-medium text-tx3">AI Gateway ID</span>
             <TextField
@@ -1241,8 +1272,12 @@ export function SettingsView() {
           <button
             disabled={offline}
             onClick={async () => {
-              const res = await admin.saveSettings({ aiGatewayId: gatewayId });
-              flash(res.ok ? "AI Gateway saved." : `Error: ${res.error}`);
+              const res = await admin.saveSettings({
+                aiGatewayId: gatewayId,
+                aiModelExtract: modelExtract.trim(),
+                aiModelProse: modelProse.trim(),
+              });
+              flash(res.ok ? "AI settings saved." : `Error: ${res.error}`);
             }}
             className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
           >

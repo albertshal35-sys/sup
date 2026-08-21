@@ -52,8 +52,36 @@ installs and reference).
    routes through it.
 
 Workers AI itself needs no setup — the `[ai]` binding in `wrangler.toml`
-ships with the deploy. Default model: `@cf/moonshotai/kimi-k2.6`
-(changeable via the `AI_MODEL` var or the `ai_model` app setting).
+ships with the deploy.
+
+**Two models, not one.** The AI calls split into two groups with opposite
+economics, so they are configured separately in **Settings → AI pipeline**:
+
+| Role | Used by | Default | Setting |
+| --- | --- | --- | --- |
+| Extraction | scrape parsing, grounding verification, field auto-mapping, rate reading | `@cf/google/gemma-4-26b-a4b-it` | `ai_model_extract` |
+| Writing | borrower briefs, outreach drafts | `@cf/moonshotai/kimi-k2.6` | `ai_model_prose` |
+
+Extraction is where essentially all the tokens go, and every one of those
+calls wants a rigid JSON object out — which [JSON mode](https://developers.cloudflare.com/workers-ai/features/json-mode/)
+enforces directly from the schema rather than by asking the model nicely. A
+small model handles that, and the integrity gates quarantine whatever it
+gets wrong instead of letting it through. Writing is a handful of calls a
+day whose output a customer reads, so it keeps the stronger model.
+
+At the time of writing that is roughly a **10× price difference** —
+`kimi-k2.6` is $0.95/M input and $4.00/M output against gemma-4's $0.10 and
+$0.30 ([Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)) —
+and `kimi-k2.6` additionally requires a paid billing method, so the split
+also decides whether the free 10,000-neuron daily allocation covers anything
+at all: ~116K input tokens/day on kimi versus ~1.1M on gemma-4.
+
+If extraction quality disappoints, step up rather than back to kimi:
+`@cf/nvidia/nemotron-3-120b-a12b` ($0.50/$1.50) is documented with
+function-calling and reasoning support and is still far cheaper. Setting
+`AI_MODEL` (or the legacy `ai_model` setting) pins **both** roles to one
+model and disables the split — useful for a bake-off, wasteful as a
+permanent state.
 
 ### 2.3 Browser Rendering (headless scraping)
 
@@ -111,7 +139,7 @@ npx wrangler secret put <NAME> --config worker/wrangler.toml
 | Var | Default | Notes |
 | --- | --- | --- |
 | `ALLOWED_ORIGIN` | `*` | CORS. Single-Worker deploys can leave `*`; tighten to your domain if you like. |
-| `AI_MODEL` | `@cf/moonshotai/kimi-k2.6` | Workers AI model for all extraction/generation. |
+| `AI_MODEL` | *(unset)* | Pins **both** model roles to one model, overriding the per-role settings. Leave unset to use the extraction/writing split. |
 | `CLOUDFLARE_ACCOUNT_ID` | *(auto)* | Injected by the deploy workflow from the GitHub secret — only set it in `wrangler.toml` for manual `npm run deploy` runs. |
 | `ALERT_FROM` | *(unset)* | Optional From address for digests, e.g. `LienWolf <alerts@yourdomain.com>`. The domain must be verified in Resend; otherwise the Resend onboarding sender is used. |
 

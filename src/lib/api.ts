@@ -538,6 +538,8 @@ export const admin = {
     dataMode?: "demo" | "live";
     markets?: string[];
     aiGatewayId?: string;
+    aiModelExtract?: string;
+    aiModelProse?: string;
     alertsEnabled?: boolean;
     alertEmail?: string;
     underwriting?: Record<string, unknown>;
