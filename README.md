@@ -9,8 +9,8 @@ need capital.
 
 | Feed | Trigger logic |
 | --- | --- |
-| **Upcoming Maturity Sniffer** | Active private/hard-money notes originated **8–10 months ago** → refi window opening, ranked by **equity/LTV** against the whole recorded debt stack |
-| **Cash-Poor Trigger** | ≥2 **all-cash purchases in 60 days** → delayed-financing candidates rebuilding liquidity |
+| **Upcoming Maturity Sniffer** | Active private/hard-money notes approaching maturity, **ranked** by how near (ACRIS states no term, so a hard band would miss every 18–24 month bridge note) and by **equity/LTV** against the live recorded debt stack |
+| **Cash-Poor Trigger** | ≥2 **genuine all-cash purchases** in a 60-day window → delayed-financing candidates rebuilding liquidity. Nominal ($0/$10 intra-family, LLC-restructuring) and fractional-interest deeds are excluded |
 | **Automated Borrower Resume** | 36-month deed + financing timeline, flips, margins, hold time, **cost-of-capital rate intel** (last/avg/highest rate paid — quote below it to win; rates are *derived* from recorded instruments and carry a confidence, since ACRIS itself publishes no rate), skip-traced contacts |
 | **Permit-to-Social Matching** | Ground-up/structural permits ≥$250K, matched to registered LLC + principal contact info |
 | **Contractor Lien Monitoring** | Fresh mechanics liens (≤21 days) → frozen draws, rescue-capital opportunities |
@@ -54,7 +54,7 @@ and share the code with your team. It doubles as the encryption key for stored v
 
 **Going live:** live data is the default. Open **Settings** → configure each data source —
 **Scrape** mode points a Cloudflare headless browser (Browser Rendering; reuses the CI `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` — the deploy workflow injects both into the Worker) at recorder/permit portals and Workers AI
-(`@cf/moonshotai/kimi-k2.6`, routed through your AI Gateway for centralized billing) extracts
+(routed through your AI Gateway for centralized billing) extracts
 clean records; **API** mode takes a vendor base URL + key (contract documented at the top of
 `worker/src/ingest.ts`). Contact enrichment is Apollo-compatible. Suggested portals for each
 source are listed inline in Settings.

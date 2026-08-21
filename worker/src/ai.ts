@@ -1,6 +1,7 @@
 /**
  * AI layer — Workers AI through Cloudflare AI Gateway (centralized billing,
- * caching, analytics). Model: @cf/moonshotai/kimi-k2.6 (configurable).
+ * caching, analytics). Models are chosen per role, not once for the app —
+ * see DEFAULT_EXTRACT_MODEL / DEFAULT_PROSE_MODEL below.
  *
  * Used for:
  *  1. Scrape normalization — turn rendered page markdown from government
@@ -13,29 +14,98 @@
  */
 
 import type { Env } from "./index";
+import {
+  GROUNDING_SCHEMA, listSchema, objectSchema, RECORD_SHAPES, shapeHint,
+  type JsonSchema, type Shape,
+} from "./schema";
 
-const DEFAULT_MODEL = "@cf/moonshotai/kimi-k2.6";
+/**
+ * Models are chosen per *role*, not once for the whole app, because the two
+ * kinds of call have opposite economics.
+ *
+ * `extract` is where essentially all the tokens go — scrape normalization,
+ * grounding verification, field auto-mapping, rate reading. Every one of
+ * them wants a rigid JSON object out, which JSON mode enforces directly, so
+ * a small model does the job and the integrity gates catch what it gets
+ * wrong. `prose` is a handful of calls a day whose output a customer reads,
+ * so it keeps the stronger model.
+ *
+ * At the time of writing kimi-k2.6 runs $0.95/M in and $4.00/M out while
+ * gemma-4 runs $0.10/M and $0.30/M — roughly 10x — and kimi additionally
+ * requires a paid billing method, so the split also decides whether the
+ * free daily neuron allocation covers anything at all. Both are overridable
+ * per deployment; see the settings keys below.
+ */
+const DEFAULT_EXTRACT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
+const DEFAULT_PROSE_MODEL = "@cf/moonshotai/kimi-k2.6";
+
+export type ModelRole = "extract" | "prose";
 
 interface ChatMessage {
   role: "system" | "user";
   content: string;
 }
 
+interface RunOpts {
+  role?: ModelRole;
+  maxTokens?: number;
+  /** JSON Schema the reply must satisfy. Enables Workers AI JSON mode. */
+  schema?: JsonSchema;
+}
+
+/**
+ * Models that rejected `response_format`. Workers AI JSON-mode support
+ * varies by model, and a rejection costs a wasted call — so remember it for
+ * the life of the isolate and go straight to the plain call next time. The
+ * prompt still carries the shape, so an unconstrained model degrades to the
+ * previous behaviour rather than failing.
+ */
+const noJsonMode = new Set<string>();
+
 export function aiAvailable(env: Env): boolean {
   return Boolean(env.AI);
 }
 
-export async function runModel(env: Env, messages: ChatMessage[], maxTokens = 2048): Promise<string> {
+/** Which model serves a role, most specific setting first. */
+export async function modelFor(env: Env, role: ModelRole): Promise<string> {
+  const specific = await getSetting(env, role === "prose" ? "ai_model_prose" : "ai_model_extract");
+  // `ai_model` / AI_MODEL remain honoured as the both-roles override, so an
+  // existing deployment that pinned a model keeps it until it opts in.
+  const shared = (await getSetting(env, "ai_model")) || env.AI_MODEL || null;
+  return specific || shared || (role === "prose" ? DEFAULT_PROSE_MODEL : DEFAULT_EXTRACT_MODEL);
+}
+
+export async function runModel(env: Env, messages: ChatMessage[], opts: RunOpts = {}): Promise<string> {
   if (!env.AI) throw new Error("ai_binding_missing");
+  const { role = "extract", maxTokens = 2048, schema } = opts;
   const gatewayId = await getSetting(env, "ai_gateway_id");
-  const model = (await getSetting(env, "ai_model")) || env.AI_MODEL || DEFAULT_MODEL;
+  const model = await modelFor(env, role);
   const options = gatewayId ? { gateway: { id: gatewayId } } : undefined;
-  const res = (await env.AI.run(model, { messages, max_tokens: maxTokens }, options)) as {
-    response?: string;
-    choices?: Array<{ message?: { content?: string } }>;
+
+  const call = async (withSchema: boolean) => {
+    const input: Record<string, unknown> = { messages, max_tokens: maxTokens };
+    if (withSchema && schema) input.response_format = { type: "json_schema", json_schema: schema };
+    const res = (await env.AI!.run(model, input, options)) as {
+      response?: string | Record<string, unknown>;
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    // Workers AI response shapes differ by model, and in JSON mode some
+    // return the parsed object rather than a string — normalize to text so
+    // every caller keeps one parsing path.
+    const raw = res?.response ?? res?.choices?.[0]?.message?.content ?? "";
+    return typeof raw === "string" ? raw : JSON.stringify(raw);
   };
-  // Workers AI models differ in response shape; accept both.
-  return res?.response ?? res?.choices?.[0]?.message?.content ?? "";
+
+  if (schema && !noJsonMode.has(model)) {
+    try {
+      return await call(true);
+    } catch (err) {
+      // Constrained decoding is an optimization, never a hard dependency.
+      noJsonMode.add(model);
+      console.warn(`json mode unsupported on ${model}; falling back`, err);
+    }
+  }
+  return call(false);
 }
 
 async function getSetting(env: Env, key: string): Promise<string | null> {
@@ -45,39 +115,46 @@ async function getSetting(env: Env, key: string): Promise<string | null> {
   return row?.value || null;
 }
 
-/** Pull the first JSON array out of a model response (handles code fences). */
-function parseJsonArray<T>(text: string): T[] {
+/**
+ * Pull a list of records out of a model response.
+ *
+ * Accepts all three shapes this can arrive in, because which one you get
+ * depends on the model: the `{"records": [...]}` envelope the schema asks
+ * for, a bare top-level array (what an unconstrained model tends to emit,
+ * and the pre-JSON-mode behaviour), and either of those wrapped in code
+ * fences. Anything else yields an empty list rather than throwing — a
+ * garbled reply is a source that produced nothing, not a pipeline error.
+ */
+export function parseJsonArray<T>(text: string): T[] {
   const cleaned = text.replace(/```(?:json)?/g, "").trim();
-  const start = cleaned.indexOf("[");
-  const end = cleaned.lastIndexOf("]");
-  if (start === -1 || end <= start) return [];
-  try {
-    const parsed = JSON.parse(cleaned.slice(start, end + 1));
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
+  if (!cleaned) return [];
+
+  const slice = (open: string, close: string): unknown => {
+    const start = cleaned.indexOf(open);
+    const end = cleaned.lastIndexOf(close);
+    if (start === -1 || end <= start) return null;
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  };
+
+  // Prefer the envelope: an object holding a single array of records.
+  const obj = slice("{", "}");
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    const arrays = Object.values(obj as Record<string, unknown>).filter(Array.isArray);
+    if (arrays.length === 1) return arrays[0] as T[];
   }
+
+  const arr = slice("[", "]");
+  return Array.isArray(arr) ? (arr as T[]) : [];
 }
-
-const LIEN_SHAPE = `{"docNumber":string,"address":string,"city":string,"county":string,"state":string,"lienType":"mechanics"|"tax"|"judgment"|"lis_pendens"|"violation"|"auction"|null,"claimant":string,"amount":number,"filedAt":"YYYY-MM-DD","ownerName":string}`;
-
-const RECORD_SHAPES: Record<string, string> = {
-  county_deeds: `{"docNumber":string,"apn":string|null,"address":string,"city":string,"county":string,"state":string,"zip":string|null,"price":number,"isCash":boolean,"deedType":string|null,"buyerName":string,"sellerName":string,"recordedAt":"YYYY-MM-DD"}`,
-  county_loans: `{"docNumber":string,"apn":string|null,"address":string,"city":string,"county":string,"state":string,"lenderName":string,"lenderType":"private"|"hard_money"|"bank"|null,"principal":number,"ratePct":number|null,"originatedAt":"YYYY-MM-DD","termMonths":number|null,"maturityDate":"YYYY-MM-DD"|null,"borrowerName":string}`,
-  permits: `{"permitNo":string,"address":string,"city":string,"county":string,"state":string,"permitType":"ground_up"|"structural"|"addition"|"remodel"|"other","description":string|null,"valuation":number,"filedAt":"YYYY-MM-DD","status":string|null,"contractor":string|null,"ownerName":string}`,
-  liens: LIEN_SHAPE,
-  lis_pendens: LIEN_SHAPE,
-  violations: LIEN_SHAPE,
-  tax_liens: LIEN_SHAPE,
-  auctions: LIEN_SHAPE,
-  satisfactions: `{"docNumber":string,"originalDocNumber":string|null,"address":string|null,"city":string|null,"county":string|null,"state":string|null,"lenderName":string,"borrowerName":string,"satisfiedAt":"YYYY-MM-DD"}`,
-  ucc_filings: `{"fileNumber":string,"securedParty":string,"debtorName":string,"filedAt":"YYYY-MM-DD","address":string|null,"city":string|null,"county":string|null,"state":string|null,"collateral":string|null}`,
-  corp_registry: `{"entityName":string,"formationDate":"YYYY-MM-DD"|null,"registeredAgent":string|null,"county":string|null,"status":string|null}`,
-};
 
 /** Target shape for a connector's records (used by the field auto-mapper). */
 export function recordShape(connectorId: string): string | null {
-  return RECORD_SHAPES[connectorId] ?? null;
+  const shape = RECORD_SHAPES[connectorId];
+  return shape ? shapeHint(shape) : null;
 }
 
 /**
@@ -92,7 +169,7 @@ export async function extractRecords<T>(
   markets: string[],
   operatorNotes: string | null
 ): Promise<T[]> {
-  const shape = RECORD_SHAPES[connectorId];
+  const shape: Shape | undefined = RECORD_SHAPES[connectorId];
   if (!shape) return [];
   const text = await runModel(
     env,
@@ -101,8 +178,8 @@ export async function extractRecords<T>(
         role: "system",
         content:
           "You extract public real-estate records from scraped government web pages for a lending-intelligence pipeline. " +
-          "Return ONLY a JSON array — no prose. Each element must match this exact shape:\n" +
-          shape +
+          'Return ONLY JSON: {"records": [...]} — no prose. Each element must match this exact shape:\n' +
+          shapeHint(shape) +
           "\nRules: extract only records visible in the content; never fabricate values; use null when a field is absent; " +
           "normalize names to uppercase; dates to YYYY-MM-DD; dollar amounts to plain numbers. " +
           `Relevant markets: ${markets.join("; ") || "any"}.` +
@@ -110,7 +187,7 @@ export async function extractRecords<T>(
       },
       { role: "user", content: markdown.slice(0, 48_000) },
     ],
-    4096
+    { maxTokens: 4096, schema: listSchema(shape) }
   );
   return parseJsonArray<T>(text);
 }
@@ -139,7 +216,7 @@ export async function verifyGrounding(
           content:
             "You audit data extraction. For each numbered record, answer whether its key identifying values " +
             "(document/permit number, dollar amount, party names, date) are all literally present in the SOURCE text. " +
-            'Return ONLY a JSON array: [{"i":number,"grounded":boolean}] — one entry per record, no prose. ' +
+            'Return ONLY JSON: {"records":[{"i":number,"grounded":boolean}]} — one entry per record, no prose. ' +
             "grounded=false if any key value does not appear in the source.",
         },
         {
@@ -147,7 +224,7 @@ export async function verifyGrounding(
           content: `RECORDS:\n${batch.map((r, i) => `${i}: ${JSON.stringify(r)}`).join("\n")}\n\nSOURCE:\n${markdown.slice(0, 40_000)}`,
         },
       ],
-      2048
+      { maxTokens: 2048, schema: GROUNDING_SCHEMA }
     );
     const verdicts = parseJsonArray<{ i: number; grounded: boolean }>(text);
     const out = new Array<boolean>(records.length).fill(false);
@@ -200,7 +277,7 @@ export async function compileSignalRule(env: Env, prompt: string): Promise<Recor
       },
       { role: "user", content: prompt.slice(0, 2_000) },
     ],
-    1024
+    { maxTokens: 1024 }
   );
   const cleaned = text.replace(/```(?:json)?/g, "").trim();
   const start = cleaned.indexOf("{");
@@ -228,7 +305,7 @@ export async function generateBrief(env: Env, context: string): Promise<string> 
       },
       { role: "user", content: context.slice(0, 24_000) },
     ],
-    1024
+    { role: "prose", maxTokens: 1024 }
   );
 }
 
@@ -257,7 +334,7 @@ export async function generateOutreach(
       },
       { role: "user", content: context.slice(0, 24_000) },
     ],
-    1024
+    { role: "prose", maxTokens: 1024 }
   );
 }
 

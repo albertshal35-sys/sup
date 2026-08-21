@@ -177,6 +177,9 @@ export interface PublicSettings {
   markets: string[];
   aiEnabled: boolean;
   aiGatewayId: string;
+  /** Effective model per role — what will actually run, defaults included. */
+  aiModelExtract: string;
+  aiModelProse: string;
   scrapingConfigured: boolean;
   alertsEnabled: boolean;
   alertEmail: string;

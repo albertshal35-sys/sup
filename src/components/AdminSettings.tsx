@@ -502,6 +502,7 @@ const DOCTOR_LABELS: Record<string, string> = {
 };
 
 type DoctorReport = Extract<Awaited<ReturnType<typeof admin.pipelineDoctor>>, { ok: true }>["data"];
+type CoverageReport = Extract<Awaited<ReturnType<typeof admin.pipelineCoverage>>, { ok: true }>["data"];
 
 /**
  * One-click activation for every free NYC source + an honest per-tab
@@ -510,13 +511,18 @@ type DoctorReport = Extract<Awaited<ReturnType<typeof admin.pipelineDoctor>>, { 
 function PipelineDoctor({ onChanged }: { onChanged: () => void }) {
   const toast = useApp((s) => s.toast);
   const [report, setReport] = useState<DoctorReport | null>(null);
+  const [coverage, setCoverage] = useState<CoverageReport | null>(null);
   const [busy, setBusy] = useState<"activate" | "diagnose" | null>(null);
 
   const diagnose = async () => {
     setBusy("diagnose");
-    const res = await admin.pipelineDoctor();
-    if (res.ok) setReport(res.data);
-    else toast(`Diagnosis failed: ${res.error}`, "error");
+    // The doctor says whether connectors ran; coverage says whether anything
+    // usable came out and whether the signal windows can see it. Volume
+    // problems almost always live in the second one.
+    const [doc, cov] = await Promise.all([admin.pipelineDoctor(), admin.pipelineCoverage()]);
+    if (doc.ok) setReport(doc.data);
+    else toast(`Diagnosis failed: ${doc.error}`, "error");
+    if (cov.ok) setCoverage(cov.data);
     setBusy(null);
   };
 
@@ -602,6 +608,71 @@ function PipelineDoctor({ onChanged }: { onChanged: () => void }) {
           </div>
         </div>
       )}
+
+      {coverage && (
+        <div className="mt-3 border-t border-line pt-3">
+          <h5 className="text-2xs font-semibold uppercase tracking-wide text-tx3">Data coverage</h5>
+
+          {coverage.notes.length > 0 && (
+            <ul className="mt-1.5 space-y-1">
+              {coverage.notes.map((n) => (
+                <li key={n} className="flex gap-1.5 text-2xs text-warn">
+                  <span aria-hidden>!</span>
+                  <span>{n}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+            {Object.entries(coverage.counts).map(([k, v]) => (
+              <div key={k} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="truncate text-tx3">{k.replace(/([A-Z])/g, " $1").toLowerCase()}</span>
+                <span className="font-mono tabular-nums text-tx1">{v.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2.5 space-y-1">
+            <div className="text-2xs font-medium text-tx3">Source freshness</div>
+            {coverage.sources.map((s) => (
+              <div key={s.source} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="text-tx2">{s.source}</span>
+                <span className={s.stale ? "text-danger" : "text-tx3"}>
+                  {s.newest ? `newest ${s.newest} · ${s.lagDays}d behind` : "no live rows"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2.5 space-y-1">
+            <div className="text-2xs font-medium text-tx3">
+              Rows each signal window reaches <span className="text-tx3/70">(measured from each source&apos;s newest record, not today)</span>
+            </div>
+            {coverage.windows.map((w) => (
+              <div key={w.signal} className="flex items-baseline justify-between gap-2 text-2xs">
+                <span className="text-tx2">{w.signal}</span>
+                <span className="text-tx3">
+                  <span className="font-mono tabular-nums text-tx1">{w.rowsInWindow.toLocaleString()}</span>
+                  {" "}in {w.from} → {w.to}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {coverage.quarantine.length > 0 && (
+            <div className="mt-2.5 space-y-1">
+              <div className="text-2xs font-medium text-tx3">Top rejection reasons</div>
+              {coverage.quarantine.map((q) => (
+                <div key={q.reason} className="flex items-baseline justify-between gap-2 text-2xs">
+                  <span className="min-w-0 flex-1 truncate text-tx2">{q.reason}</span>
+                  <span className="font-mono tabular-nums text-tx1">{q.count.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -616,6 +687,8 @@ export function SettingsView() {
   const [markets, setMarkets] = useState<string[]>(serverSettings?.markets ?? []);
   const [newMarket, setNewMarket] = useState("");
   const [gatewayId, setGatewayId] = useState(serverSettings?.aiGatewayId ?? "");
+  const [modelExtract, setModelExtract] = useState(serverSettings?.aiModelExtract ?? "");
+  const [modelProse, setModelProse] = useState(serverSettings?.aiModelProse ?? "");
   const [apiUp, setApiUp] = useState<boolean | null>(serverSettings ? true : null);
   const [purgeArmed, setPurgeArmed] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -649,6 +722,8 @@ export function SettingsView() {
     }
     setMarkets(probe.settings.markets);
     setGatewayId(probe.settings.aiGatewayId);
+    setModelExtract(probe.settings.aiModelExtract);
+    setModelProse(probe.settings.aiModelProse);
     setAlertsEnabled(probe.settings.alertsEnabled);
     setAlertEmail(probe.settings.alertEmail);
     if (probe.settings.underwriting) setUw(probe.settings.underwriting);
@@ -1214,9 +1289,7 @@ export function SettingsView() {
         <div className="flex items-center gap-2 rounded-xl border border-line bg-raised/40 px-4 py-3">
           <Sparkles strokeWidth={1.75} className="h-4 w-4 shrink-0 text-violet" />
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold text-tx1">
-              Model: <span className="font-mono text-2xs">@cf/moonshotai/kimi-k2.6</span>
-            </div>
+            <div className="text-xs font-semibold text-tx1">Models</div>
             <div className="text-2xs text-tx3">
               {serverSettings?.aiEnabled
                 ? "Workers AI binding active."
@@ -1227,7 +1300,36 @@ export function SettingsView() {
             </div>
           </div>
         </div>
-        <div className="mt-2.5 flex max-w-md items-end gap-2">
+        <div className="mt-2.5 max-w-lg space-y-2">
+          <div>
+            <span className="text-2xs font-medium text-tx3">
+              Extraction model — scrape parsing, grounding checks, field mapping, rate reading
+            </span>
+            <TextField
+              value={modelExtract}
+              onChange={setModelExtract}
+              placeholder="@cf/google/gemma-4-26b-a4b-it"
+              disabled={offline}
+              className="mt-1"
+            />
+            <div className="mt-1 text-2xs text-tx3">
+              Nearly all token spend. Replies are schema-constrained, so a small model does the job —
+              and the integrity gates quarantine whatever it gets wrong.
+            </div>
+          </div>
+          <div>
+            <span className="text-2xs font-medium text-tx3">Writing model — borrower briefs and outreach drafts</span>
+            <TextField
+              value={modelProse}
+              onChange={setModelProse}
+              placeholder="@cf/moonshotai/kimi-k2.6"
+              disabled={offline}
+              className="mt-1"
+            />
+            <div className="mt-1 text-2xs text-tx3">A few calls a day, and a customer reads the output.</div>
+          </div>
+        </div>
+        <div className="mt-2.5 flex max-w-lg items-end gap-2">
           <div className="flex-1">
             <span className="text-2xs font-medium text-tx3">AI Gateway ID</span>
             <TextField
@@ -1241,8 +1343,12 @@ export function SettingsView() {
           <button
             disabled={offline}
             onClick={async () => {
-              const res = await admin.saveSettings({ aiGatewayId: gatewayId });
-              flash(res.ok ? "AI Gateway saved." : `Error: ${res.error}`);
+              const res = await admin.saveSettings({
+                aiGatewayId: gatewayId,
+                aiModelExtract: modelExtract.trim(),
+                aiModelProse: modelProse.trim(),
+              });
+              flash(res.ok ? "AI settings saved." : `Error: ${res.error}`);
             }}
             className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-40"
           >

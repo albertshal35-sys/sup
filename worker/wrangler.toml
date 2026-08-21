@@ -31,7 +31,11 @@ binding = "AI"
 
 [vars]
 ALLOWED_ORIGIN = "*"
-AI_MODEL = "@cf/moonshotai/kimi-k2.6"
+# AI_MODEL is intentionally unset. Models are chosen per role in code —
+# a cheap one for the high-volume structured extraction, a stronger one for
+# the customer-facing prose — and setting AI_MODEL here would pin BOTH roles
+# to one model and undo that split. Override per role in
+# Settings → AI pipeline, or set AI_MODEL to force one model everywhere.
 # CLOUDFLARE_ACCOUNT_ID is injected automatically by the deploy workflow
 # (--var from the CLOUDFLARE_ACCOUNT_ID GitHub secret) — used by Browser
 # Rendering (headless scraping). Only set it here for manual deploys.

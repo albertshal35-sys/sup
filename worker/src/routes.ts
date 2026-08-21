@@ -11,7 +11,8 @@ import { validateRecord } from "./integrity";
 import { renderPageMarkdown, extractRecords } from "./ai";
 import { encryptSecret } from "./crypto";
 import { authConfigured, loginWithCode, verifySession } from "./auth";
-import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, recordShape, runModel } from "./ai";
+import { coverageReport } from "./coverage";
+import { aiAvailable, compileSignalRule, generateBrief, generateOutreach, modelFor, recordShape, runModel } from "./ai";
 import { sendTestDigest } from "./alerts";
 import { dataQualitySummary } from "./integrity";
 import { enrichEntity } from "./apollo";
@@ -88,7 +89,8 @@ async function getDataMode(env: Env): Promise<"demo" | "live"> {
 route("GET", "/api/settings", async (_req, env) => {
   const rows = await env.DB.prepare(
     `SELECT key, value FROM app_settings WHERE key IN
-     ('data_mode','markets','ai_gateway_id','alerts_enabled','alert_email','underwriting','outreach')`
+     ('data_mode','markets','ai_gateway_id','ai_model_extract','ai_model_prose',
+      'alerts_enabled','alert_email','underwriting','outreach')`
   ).all<{ key: string; value: string }>();
   const map = Object.fromEntries(rows.results.map((r) => [r.key, r.value]));
   const parse = (v: string | undefined) => {
@@ -104,6 +106,10 @@ route("GET", "/api/settings", async (_req, env) => {
       markets: parse(map.markets) ?? [],
       aiEnabled: aiAvailable(env),
       aiGatewayId: map.ai_gateway_id || "",
+      // Reported as the effective model per role, so the UI shows what will
+      // actually run rather than an empty box when the default applies.
+      aiModelExtract: await modelFor(env, "extract"),
+      aiModelProse: await modelFor(env, "prose"),
       scrapingConfigured: Boolean(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN),
       alertsEnabled: map.alerts_enabled === "true",
       alertEmail: map.alert_email || "",
@@ -492,6 +498,8 @@ route("PUT", "/api/admin/settings", async (req, env) => {
     dataMode?: string;
     markets?: string[];
     aiGatewayId?: string;
+    aiModelExtract?: string;
+    aiModelProse?: string;
     alertsEnabled?: boolean;
     alertEmail?: string;
     underwriting?: Record<string, unknown>;
@@ -518,6 +526,16 @@ route("PUT", "/api/admin/settings", async (req, env) => {
   }
   if (body.outreach && typeof body.outreach === "object") {
     await upsertSetting("outreach", JSON.stringify(body.outreach).slice(0, 2000));
+  }
+  for (const [field, key] of [["aiModelExtract", "ai_model_extract"], ["aiModelProse", "ai_model_prose"]] as const) {
+    const value = body[field];
+    if (typeof value !== "string") continue;
+    // Blank clears the override and restores the built-in default.
+    await env.DB.prepare(
+      "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
+    )
+      .bind(key, value.trim().slice(0, 120))
+      .run();
   }
   if (typeof body.aiGatewayId === "string") {
     await env.DB.prepare(
@@ -1063,7 +1081,7 @@ async function autoMapConnector(
         },
         { role: "user", content: sample },
       ],
-      1024
+      { maxTokens: 1024 }
     );
   } catch (err) {
     return { ok: false, error: "automap_failed", detail: String(err instanceof Error ? err.message : err).slice(0, 200), status: 502 };
@@ -1164,6 +1182,12 @@ route("POST", "/api/admin/sources/activate-all", async (_req, env) => {
  * config/run/backfill state and checks each feed's data prerequisites
  * against what is actually in the database right now.
  */
+route("GET", "/api/admin/pipeline/coverage", async (_req, env) => {
+  // Complements the doctor: that answers "did the connectors run", this
+  // answers "did anything usable come out, and can the signals see it".
+  return json(await coverageReport(env), env);
+});
+
 route("GET", "/api/admin/pipeline/doctor", async (_req, env) => {
   const connectors: Array<Record<string, unknown>> = [];
   for (const id of CONNECTOR_IDS) {
