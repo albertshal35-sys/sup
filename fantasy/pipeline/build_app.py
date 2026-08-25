@@ -286,14 +286,37 @@ print("room read (¢ on the dollar, 2025):", {p: round(v * 100) for p, v in EXPJ
 RESEARCH["waa"] = dict(
     acc_waa=WAAJ["acc_waa"], acc_pts=WAAJ["acc_pts"],
     win_waa=WAAJ["wins"], win_pts=WAAJ["points"], diff=WAAJ["diff"], se=WAAJ["se"])
+# Density levels are derived from the team count, so read whichever ones the study
+# actually produced rather than hardcoding 12-team keys into a 10-team league.
+def _field(kind, which):
+    lv = sorted((int(k.split("|")[1]) for k in FIELD if k.startswith(kind + "|")))
+    lv = [n for n in lv if FIELD[f"{kind}|{n}"].get("se") is not None
+          and FIELD[f"{kind}|{n}"]["se"] == FIELD[f"{kind}|{n}"]["se"]]
+    if not lv:
+        return None
+    n = lv[0] if which == "rare" else lv[-1] if which == "common" else lv[len(lv) // 2]
+    return dict(n=n, edge=FIELD[f"{kind}|{n}"]["edge"])
+
+
+_vr, _vh, _vc = _field("volatile", "rare"), _field("volatile", "half"), _field("volatile", "common")
+_sr, _sc = _field("safe", "rare"), _field("safe", "common")
+_qpr, _qph, _qpc = (_field("qbprem", k) for k in ("rare", "half", "common"))
+_qdr, _qdh, _qdc = (_field("qbdisc", k) for k in ("rare", "half", "common"))
 RESEARCH["field"] = dict(
-    vol_rare=FIELD["volatile|2"]["edge"], vol_half=FIELD["volatile|6"]["edge"],
-    vol_common=FIELD["volatile|10"]["edge"],
-    safe_rare=FIELD["safe|2"]["edge"], safe_common=FIELD["safe|10"]["edge"],
+    vol_rare=_vr["edge"], vol_half=_vh["edge"], vol_common=_vc["edge"],
+    safe_rare=_sr["edge"], safe_common=_sc["edge"],
+    n_rare=_vr["n"], n_half=_vh["n"], n_common=_vc["n"], teams=10,
+    # The quarterback arms, both directions. Unlike the volatility and floor tilts,
+    # these do NOT flip sign with the field, which is what separates a mispricing
+    # from a crowding trade.
+    qbprem=[_qpr["edge"], _qph["edge"], _qpc["edge"]],
+    qbdisc=[_qdr["edge"], _qdh["edge"], _qdc["edge"]],
     qb_density=[dict(n=int(k), edge=v["edge"], se=v["se"])
                 for k, v in sorted(QBD.items(), key=lambda x: int(x[0]))
-                if v.get("se") is not None])
+                if v.get("se") is not None and v["se"] == v["se"]])
 print("corrected: QB premium by density ->", RESEARCH["field"]["qb_density"])
+print("QB tilt vs field (rare/half/common): premium", RESEARCH["field"]["qbprem"],
+      "| discount", RESEARCH["field"]["qbdisc"])
 
 # ---------------------------------------------------------------- auction study
 A = {r["strategy"]: r for r in AUC}

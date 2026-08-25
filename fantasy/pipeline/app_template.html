@@ -802,17 +802,17 @@ function renderFindings() {
     <p class="eyebrow">Edges decay as the room copies you</p>
     <div class="bignum">${R.field.vol_rare >= 0 ? "+" : ""}${fmt(R.field.vol_rare, 1)} → ${fmt(R.field.vol_common, 1)}</div>
     <p>Paying up for boom-bust players at equal projected points gained
-    ${fmt(R.field.vol_rare, 1)} points of win rate when only two teams did it, and lost
-    ${fmt(Math.abs(R.field.vol_common), 1)} when ten did. Preferring safe, high-floor players showed the same
+    ${fmt(R.field.vol_rare, 1)} points of win rate when only ${R.field.n_rare} teams did it, and lost
+    ${fmt(Math.abs(R.field.vol_common), 1)} when ${R.field.n_common} did. Preferring safe, high-floor players showed the same
     shape in reverse. Neither is a strategy; both are crowding trades. This is why the Auction Room does not
     carry a fixed lean and instead reads what your actual room is paying, position by position, and points you
     at whatever it is neglecting.</p>
     <dl class="kv">
-      <dt>Chase volatility, 2 of 12 doing it</dt><dd class="num">${R.field.vol_rare >= 0 ? "+" : ""}${fmt(R.field.vol_rare, 1)} pp</dd>
+      <dt>Chase volatility, ${R.field.n_rare} of ${R.field.teams} doing it</dt><dd class="num">${R.field.vol_rare >= 0 ? "+" : ""}${fmt(R.field.vol_rare, 1)} pp</dd>
       <dt>…half the room doing it</dt><dd class="num">${R.field.vol_half >= 0 ? "+" : ""}${fmt(R.field.vol_half, 1)} pp</dd>
-      <dt>…10 of 12 doing it</dt><dd class="num">${fmt(R.field.vol_common, 1)} pp</dd>
-      <dt>Chase safe floors, 2 of 12</dt><dd class="num">${R.field.safe_rare >= 0 ? "+" : ""}${fmt(R.field.safe_rare, 1)} pp</dd>
-      <dt>…10 of 12</dt><dd class="num">${fmt(R.field.safe_common, 1)} pp</dd>
+      <dt>…${R.field.n_common} of ${R.field.teams} doing it</dt><dd class="num">${fmt(R.field.vol_common, 1)} pp</dd>
+      <dt>Chase safe floors, ${R.field.n_rare} of ${R.field.teams}</dt><dd class="num">${R.field.safe_rare >= 0 ? "+" : ""}${fmt(R.field.safe_rare, 1)} pp</dd>
+      <dt>…${R.field.n_common} of ${R.field.teams}</dt><dd class="num">${fmt(R.field.safe_common, 1)} pp</dd>
     </dl>
   </div>
 
@@ -835,6 +835,30 @@ function renderFindings() {
     </table></div>
     <p class="hint" style="margin-top:.4rem">Players priced at a dollar: this room ${R.priceshape.at1_room},
       old board ${R.priceshape.at1_old}, now ${R.priceshape.at1_new}.</p>
+  </div>
+
+  <div class="finding" style="border-top-color:var(--gold)">
+    <p class="eyebrow" style="color:var(--gold)">Open question — the board may still ask too much for quarterbacks</p>
+    <div class="bignum" style="color:var(--gold)">+${fmt(R.field.qbdisc[1], 1)} pp</div>
+    <p>Two clean arms, one board, everything else held fixed. Teams that valued quarterbacks at
+    <strong>80% of what this board says</strong> beat teams that paid the board — and they did it at
+    <em>every</em> density tested. Paying a 25% premium lost at every density too.</p>
+    <dl class="kv">
+      <dt>Discount QBs, ${R.field.n_rare} of ${R.field.teams}</dt><dd class="num" style="color:var(--accent)">+${fmt(R.field.qbdisc[0], 1)} pp</dd>
+      <dt>…half the room</dt><dd class="num" style="color:var(--accent)">+${fmt(R.field.qbdisc[1], 1)} pp</dd>
+      <dt>…${R.field.n_common} of ${R.field.teams}</dt><dd class="num" style="color:var(--accent)">+${fmt(R.field.qbdisc[2], 1)} pp</dd>
+      <dt>Premium on QBs, ${R.field.n_rare} of ${R.field.teams}</dt><dd class="num" style="color:var(--danger)">${fmt(R.field.qbprem[0], 1)} pp</dd>
+      <dt>…${R.field.n_common} of ${R.field.teams}</dt><dd class="num" style="color:var(--danger)">${fmt(R.field.qbprem[2], 1)} pp</dd>
+    </dl>
+    <p style="margin-top:.5rem">That pattern is <em>not</em> a crowding trade. The volatility and floor tilts
+    above flip sign as the room copies them; this one holds its sign whether two teams do it or eight. A tilt
+    that survives the field is a statement that the underlying number is wrong, and the number here is the
+    board's own quarterback valuation.</p>
+    <p class="hint">Stated as an open question rather than a fix, because the honest version of this claim needs
+    work this page has not done: the arm prices off raw projections without the spread correction, and the
+    two-quarterback replacement level that makes QBs expensive is itself measured, not assumed. Until that is
+    resolved, read the quarterback rows as a ceiling — and note the <strong>Expect $</strong> column already
+    says this room will let you have them for far less.</p>
   </div>
 
   <div class="finding" style="border-top-color:var(--danger)">

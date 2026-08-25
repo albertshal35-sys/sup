@@ -91,7 +91,11 @@ print("=" * 78)
 print(f"  {'candidate':<12}{'field':<22}{'tilted':>9}{'neutral':>9}{'edge':>9}{'SE':>7}")
 res = {}
 for kind in ("volatile", "safe", "qbprem", "qbdisc"):
-    for n_treat, label in ((6, "half the room"), (2, "only 2 of 12"), (10, "10 of 12")):
+    # Levels are expressed against TEAMS, not hardcoded: at n_treat == TEAMS there is
+    # no neutral arm left to measure against, which silently produced NaN.
+    for n_treat, label in ((TEAMS // 2, "half the room"),
+                           (2, f"only 2 of {TEAMS}"),
+                           (TEAMS - 2, f"{TEAMS - 2} of {TEAMS}")):
         t, n, d, se = duel(kind, n_treat)
         res[f"{kind}|{n_treat}"] = dict(tilted=round(t, 2), neutral=round(n, 2),
                                         edge=round(d, 2), se=round(se, 2))

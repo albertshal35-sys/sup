@@ -80,7 +80,7 @@ print("V. QUARTERBACK PREMIUM BY FIELD DENSITY  —  stretch above list, same bo
 print("=" * 78)
 print(f"  {'how many do it':<20}{'them':>9}{'others':>9}{'edge':>9}{'SE':>7}")
 out = {}
-for n_treat in (2, 4, 6, 8, 10):
+for n_treat in (2, 4, 6, 8):          # TEAMS is 10; at 10 there is no control arm left
     a, b_ = [], []
     for season in ALL:
         bb, rep = BOARDS[season]
@@ -112,7 +112,7 @@ for n_treat in (2, 4, 6, 8, 10):
     d = (A.mean() - B.mean()) * 100
     out[n_treat] = dict(them=round(A.mean() * 100, 2), others=round(B.mean() * 100, 2),
                         edge=round(d, 2), se=round(se, 2))
-    print(f"  {str(n_treat) + ' of 12':<20}{A.mean()*100:9.2f}{B.mean()*100:9.2f}{d:+9.2f}{se:7.2f}", flush=True)
+    print(f"  {str(n_treat) + f' of {TEAMS}':<20}{A.mean()*100:9.2f}{B.mean()*100:9.2f}{d:+9.2f}{se:7.2f}", flush=True)
 
 json.dump(out, open("out/research_qb_density.json", "w"), indent=1)
 print("\nwrote out/research_qb_density.json")

@@ -282,10 +282,39 @@ Worth a little while you are one of two doing it; worth less than nothing once s
 are. That is a description of a crowding trade, not a strategy.
 
 Testing every other tilt the same way produced the same lesson. Paying up for boom-bust
-players at equal projected points gained **+5.4** points when only two teams did it and
-lost **−8.7** when ten did. Preferring safe, high-floor players showed the same shape
-reversed. These are not strategies; they are trades against the room, and their sign flips
-with the room.
+players at equal projected points gained **+8.6** points when only two teams did it and lost
+**−8.7** when eight did. Preferring safe, high-floor players showed the same shape: **+3.3**
+rare, **−13.3** common. These are not strategies; they are trades against the room, and their
+sign flips with the room.
+
+One correction to this section itself: the density arms were still written for a twelve-team
+room after the league moved to ten. At `n_treat = 10` every team was tilted, leaving no
+control group, so the "10 of 12" figure was `NaN` and the app had been showing numbers from a
+stale twelve-team run. Levels now derive from the team count.
+
+#### The one tilt that does not flip — and why it is an open question
+
+Two arms did **not** behave like crowding trades:
+
+| | 2 of 10 | half | 8 of 10 |
+|---|---|---|---|
+| Pay a 25% premium for QBs | −6.3 | −7.0 | −9.1 |
+| Value QBs at 80% of the board | **+7.8** | **+5.6** | **+4.2** |
+
+Discounting quarterbacks wins at *every* density, and the premium loses at every density. A
+tilt whose sign survives the field is not a trade against the room — it is a statement that
+the underlying number is wrong, and the number here is this board's own quarterback valuation.
+
+That is filed as an open question rather than acted on, because the honest version of the
+claim needs work not yet done. The arm prices off raw projections without the spread
+correction the board applies; the two-quarterback replacement level that makes quarterbacks
+expensive is measured rather than assumed, and it is what the whole 2QB thesis rests on; and
+`auction_sim_real.py`, which runs twelve strategies at once instead of a clean duel, puts QB
+discount roughly level with neutral. Two designs disagree, and the cleaner one says discount.
+
+Practically it changes little today, because the **Expect $** column already says this room
+will sell you quarterbacks far below the board. But it means the quarterback rows should be
+read as a ceiling, and it is the first thing to re-test with more data.
 
 So the tool ships **no fixed positional lean.** What replaces it is a live read: the
 Auction Room tracks what your actual room has paid for each position against list, and
