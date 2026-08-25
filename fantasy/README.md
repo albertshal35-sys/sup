@@ -36,8 +36,9 @@ now*, the most you should pay, and which position your money is stretching furth
 
 **The Matrix** — all 40 metrics correlated against each other and clustered into a heatmap,
 so the duplicates fall into blocks; which stats are already inside the price and which know
-something it does not; and a chart of price against the size of a player's job, with the
-two corners that survived a proper control marked on it.
+something it does not; a chart of price against the size of a player's job, with the two
+corners that survived a proper control marked on it; and a sortable player-by-metric grid
+where every cell is shaded by how far that player sits from the average at his own position.
 
 ## How the numbers were built
 
@@ -261,6 +262,25 @@ The lesson generalises. "Uncorrelated with price" and "adds something at a given
 different claims, and only the second one is worth money. Screening on the first promotes
 stats whose entire edge is that they point at cheap players.
 
+#### The player grid
+
+`playergrid.py` drops the same idea one level down: 150 priced players as rows, twelve
+metrics as columns, every cell a z-score inside the player's own position, shaded teal for
+favourable and rust for unfavourable. Three columns (TD luck, blank weeks, age) have their
+colour flipped because the good direction is down.
+
+The columns are held to the tab's own standard — no two may correlate above the 0.85 that
+defines a duplicate. That is an assertion in the build, and it **fired twice**: `touches`
+turned out to be literally the same column as `prior use` for every non-quarterback
+(targets + carries either way), and `role` ran 0.888 against prior use. Both were cut. The
+closest surviving pair is points/gm against floor rate at 0.657. Price is exempt from the
+check — it is the benchmark the other columns are read against, not a rival signal, so its
+0.87 against projected points is the design rather than a fault.
+
+Only the LOAD column carries a validated edge. The rest are descriptive: they show what you
+are buying and where a profile disagrees with itself, not that disagreement is profitable.
+Sorting a twelve-column grid will always surface somebody — that is what sorting does.
+
 ### The Leap: situational signals
 
 The board prices a player on what he did. A breakout list can only add value if it predicts
@@ -341,6 +361,7 @@ python breakout.py              # The Leap panel + 8-signal model
 python load.py                  # LOAD, and the price-held-fixed control
 python corrmatrix.py            # the 40-metric correlation matrix
 python standouts.py             # the corners of the price-vs-LOAD chart
+python playergrid.py            # the player-by-metric grid
 python build_app.py             # emit the app
 ```
 

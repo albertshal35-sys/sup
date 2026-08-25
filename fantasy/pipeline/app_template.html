@@ -173,6 +173,18 @@ thead th:first-child, thead th.l { text-align: left; }
 /* short reference tables are read in place, not scrolled past — a header pinned to
    the viewport detaches from its own rows */
 table.plain thead th { position: static; cursor: default; }
+/* the player grid scrolls inside its own box, so its header pins to that box and
+   the name column pins to the left edge rather than to the page */
+table.grid-t { font-size: .8rem; }
+table.grid-t thead th { top: 0; z-index: 6; }
+table.grid-t th.stick, table.grid-t td.stick {
+  position: sticky; left: 0; z-index: 4; background: var(--surface);
+  border-right: 1px solid var(--line); min-width: 15rem;
+}
+table.grid-t thead th.stick { z-index: 7; background: var(--surface-2); }
+table.grid-t tbody td { padding: .3rem .5rem; border-bottom: 1px solid var(--line-soft); }
+table.grid-t tbody tr:hover td.stick { background: var(--surface-2); }
+table.grid-t .pname { margin: 0 .35rem 0 .4rem; }
 thead th[aria-sort]:not([aria-sort="none"]) { color: var(--accent); }
 tbody td { padding: .42rem .55rem; text-align: right; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 tbody td.l { text-align: left; }
@@ -302,7 +314,10 @@ const S = {
   boardFilter: "ALL",
   boardQuery: "",
   sortKey: "auc",
-  sortDir: -1
+  sortDir: -1,
+  gridPos: "ALL",
+  gridSort: 0,
+  gridDir: -1
 };
 const KEY = "gridiron-moneyball-auction-v1";
 function save() {
@@ -1457,6 +1472,61 @@ function renderHeatmap() {
   </figure>`;
 }
 
+/* ---------------------------------------------------------------- player grid */
+function gridCell(z, flip) {
+  if (z == null) return "transparent";
+  const v = flip ? -z : z;
+  return `color-mix(in srgb, var(--${v >= 0 ? "accent" : "danger"}) ${(Math.min(1, Math.abs(v) / 2.5) * 68).toFixed(1)}%, var(--surface))`;
+}
+
+function renderGrid() {
+  const G = RESEARCH.grid, host = $("#gridHost");
+  if (!host) return;
+  let rows = G.rows.filter(r => S.gridPos === "ALL" || r.p === S.gridPos);
+  const k = S.gridSort;
+  rows = rows.slice().sort((a, b) => {
+    const av = a.c[k] && a.c[k][0], bv = b.c[k] && b.c[k][0];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return (av - bv) * S.gridDir;
+  });
+  host.innerHTML = `
+  <div class="tablewrap" style="max-height:70vh;overflow-y:auto">
+    <table class="grid-t">
+      <thead><tr>
+        <th class="l stick">player</th>
+        ${G.cols.map((c, i) => `<th data-k="${i}" title="${c.help}${c.flip ? " — lower is better, colours flipped" : ""}"
+          aria-sort="${k === i ? (S.gridDir < 0 ? "descending" : "ascending") : "none"}">${c.label}${c.flip ? " ↓" : ""}</th>`).join("")}
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr>
+          <td class="l stick"><span class="pos-pill pos-${r.p}">${r.p}</span>
+            <span class="pname">${r.n}</span>
+            <span class="psub">${r.t || ""}${r.d ? " · " + r.p + r.d : ""}</span></td>
+          ${r.c.map((cv, i) => cv == null
+            ? `<td class="num" style="color:var(--muted)">—</td>`
+            : `<td class="num" style="background:${gridCell(cv[1], G.cols[i].flip)}"
+                 title="${G.cols[i].label} ${cv[0]}, ${cv[1] >= 0 ? "+" : ""}${cv[1]} SD for a ${r.p}"
+                 >${G.cols[i].key === "auction" ? "$" : ""}${cv[0].toFixed(G.cols[i].nd)}</td>`).join("")}
+        </tr>`).join("")}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint" style="margin-top:.5rem">${rows.length} players. Colour is standard deviations from the
+    average at that player's own position — teal favourable, rust unfavourable. Three columns are marked ↓
+    because the good direction is down, and their colours are flipped to match.</p>`;
+
+  host.querySelectorAll("th[data-k]").forEach(th => {
+    th.onclick = () => {
+      const i = +th.dataset.k;
+      S.gridDir = S.gridSort === i ? -S.gridDir : -1;
+      S.gridSort = i;
+      renderGrid();
+    };
+  });
+}
+
 /* Greedy label placement: names sit to the right of their dot, and slide down until
    they clear the last label placed nearby. A hairline keeps each name attached to
    the point it belongs to once it has moved. */
@@ -1676,7 +1746,38 @@ function renderMatrix() {
         not a mandate.</div>
       </details>
     </div>
+
+    <div class="card pad">
+      <div class="section-head">
+        <h2>Every player, every column</h2>
+        <span class="hint">click a heading to sort — the fastest way to find a lopsided profile</span>
+      </div>
+      <p style="max-width:70ch">The heatmap above asks how the <em>stats</em> relate to each other. This asks it
+      one level down: given those stats, which <em>players</em> disagree with themselves. Every cell is scored
+      against others at that player's own position.</p>
+      <p style="max-width:70ch">The columns are held to this tab's own standard — no two may correlate above the
+      0.85 that defines a duplicate up there. The check is an assertion in the build, and it fired twice while
+      this was being written: <em>touches</em> turned out to be the same column as <em>prior use</em> for every
+      non-quarterback, and <em>role</em> ran 0.888 against prior use. Both were cut. The closest surviving pair
+      is ${R.grid.max_pair[0]} against ${R.grid.max_pair[1]} at ${fmt(R.grid.max_pair[2], 3)}. Price is exempt:
+      it is the benchmark the other columns are read against, not a rival signal.</p>
+      <div class="chips" style="margin:.7rem 0 .8rem">
+        ${["ALL", "QB", "RB", "WR", "TE"].map(p =>
+          `<button class="chip" data-gpos="${p}" aria-pressed="${S.gridPos === p}">${p}</button>`).join("")}
+      </div>
+      <div id="gridHost"></div>
+      <p class="hint" style="margin-top:.7rem;max-width:72ch"><strong>One caution.</strong> Only the LOAD column
+      carries an edge that survived a price control (+${fmt(R.load.spread)} points at a fixed price). The rest are
+      descriptive: they tell you what you are buying and where a profile is strange, not that strange is
+      profitable. Sorting this grid will always surface someone — that is what sorting does. Treat a cell that
+      disagrees with the price as a question to ask, not an answer.</p>
+    </div>
   </div>`;
+
+  el.querySelectorAll("[data-gpos]").forEach(btn => {
+    btn.onclick = () => { S.gridPos = btn.dataset.gpos; renderMatrix(); };
+  });
+  renderGrid();
 
   const svg = $("#hmSvg"), read = $("#hmRead");
   if (svg) {

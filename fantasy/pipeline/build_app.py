@@ -24,6 +24,7 @@ RUNJ = json.load(open("out/research_runway.json"))
 LOADJ = json.load(open("out/research_load.json"))
 CORR = json.load(open("out/research_corr.json"))
 STAND = json.load(open("out/research_standouts.json"))
+GRID = json.load(open("out/research_grid.json"))
 LOADP = pd.read_parquet("out/load.parquet")
 LOADP = LOADP[LOADP.season == 2026][["player_id", "LOAD", "load_raw", "lift_raw",
                                      "role_opp", "opp_prev", "depth"]]
@@ -239,8 +240,9 @@ RESEARCH["corr"] = dict(
     n_rows=CORR.get("n_rows"),
     independence=CORR["independence"])
 RESEARCH["standouts"] = STAND
+RESEARCH["grid"] = GRID
 print("matrix:", len(CORR["labels"]), "metrics |", len(CORR["dupes"]), "duplicate pairs |",
-      len(STAND["scatter"]), "scatter points")
+      len(STAND["scatter"]), "scatter points |", len(GRID["rows"]), "grid rows")
 
 RESEARCH["breakout"] = dict(
     rho=BRK["rho"], spread=BRK["spread"], se=BRK["se"], n=BRK["n"],
