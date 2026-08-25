@@ -19,6 +19,11 @@ ROOM = json.load(open("out/room_bias.json"))
 BRK = json.load(open("out/research_breakout.json"))
 BB = pd.read_parquet("out/breakout_board.parquet")
 SOS = pd.read_parquet("out/sos_2026.parquet")
+LIFTJ = json.load(open("out/research_lift.json"))
+RUNJ = json.load(open("out/research_runway.json"))
+LIFTP = pd.read_parquet("out/lift.parquet")
+LIFTP = LIFTP[LIFTP.season == 2026][["player_id", "LIFT", "lift_raw", "role_opp", "opp_prev"]]
+board = board.merge(LIFTP, on="player_id", how="left")
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -106,6 +111,8 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
+        lift=clean(r.get("LIFT"), 0), liftRaw=clean(r.get("lift_raw"), 1),
+        role=clean(r.get("role_opp"), 1), oppPrev=clean(r.get("opp_prev"), 1),
         waa=clean(r.get("waa25"), 2), flr=clean(r.get("flr25"), 3),
         spk=clean(r.get("spk25"), 3), ghst=clean(r.get("ghst25"), 3),
         flags=list(r.flags) if isinstance(r.flags, (list, np.ndarray)) else []))
@@ -198,6 +205,26 @@ RESEARCH["budget_split"] = split
 def _l(v):
     return list(v) if isinstance(v, (list, np.ndarray)) else []
 
+
+RESEARCH["lift"] = dict(
+    rho=LIFTJ["rho"], spread=LIFTJ["spread"], se=LIFTJ["se"], n=LIFTJ["n"],
+    seasons=LIFTJ["seasons"], role_curve=LIFTJ["role_curve"],
+    quintiles=LIFTJ["quintiles"],
+    runway_spread=RUNJ["spread"], runway_se=RUNJ["se"], runway_rho=RUNJ["rho"],
+    runway_earned=RUNJ["parts"]["earned"],
+    leaders=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
+                  team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
+                  lift=clean(r.LIFT, 0), raw=clean(r.lift_raw, 1),
+                  role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
+             for _, r in board[(board.auction >= 2) & board.LIFT.notna()]
+                              .nlargest(16, "LIFT").iterrows()],
+    maxed=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
+                team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
+                lift=clean(r.LIFT, 0), role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
+           for _, r in board[(board.auction >= 15) & board.LIFT.notna()]
+                            .nsmallest(6, "LIFT").iterrows()])
+print("LIFT: rho", LIFTJ["rho"], "spread", LIFTJ["spread"],
+      "| leaders", len(RESEARCH["lift"]["leaders"]))
 
 RESEARCH["breakout"] = dict(
     rho=BRK["rho"], spread=BRK["spread"], se=BRK["se"], n=BRK["n"],

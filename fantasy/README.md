@@ -102,6 +102,7 @@ missed week as a zero, because that is what your lineup scored.
 | **Floor** | Share of weeks he outscored a typical starter at his position — how often he actually won you the slot. |
 | **Spike** | Share of weeks in the top decile of outcomes at his position. |
 | **Blank** | Share of weeks he gave you nothing at all. |
+| **LIFT** | Touches a week his 2026 role pays, minus what he actually got — see below. |
 
 WAA forecasts realised wins **better than projected points do** — 0.719 versus 0.670 rank
 correlation, winning all ten test seasons. And pricing an auction off it still **lost 7.2
@@ -158,6 +159,44 @@ So the tool ships **no fixed positional lean.** What replaces it is a live read:
 Auction Room tracks what your actual room has paid for each position against list, and
 points you at whatever it is neglecting. That is the only version of "buy low" that cannot
 be arbitraged away by the other managers, because it is defined by them.
+
+### LIFT — a stat built for finding breakouts
+
+    LIFT = touches a week his 2026 job normally pays
+         − touches a week he actually got in 2025
+
+Scored against others at his own position and placed on a 0–100 scale, because a
+quarterback drops back thirty-five times and a third receiver sees five. What each rung of
+the depth chart pays is measured, not assumed:
+
+| | 1st | 2nd | 3rd |
+|---|---|---|---|
+| QB | 35.1 | 15.0 | 25.0 |
+| RB | 16.8 | 8.0 | 4.0 |
+| WR | 6.5 | 5.6 | 4.1 |
+| TE | 4.5 | 1.9 | 1.3 |
+
+A rookie starter has enormous LIFT. So does a backup promoted after the man ahead of him
+left. A player already carrying a full load has none — which is the point, because the
+board has already paid for the workload he had.
+
+**Between the top and bottom fifth: +29 points** of season-long residual, ±5.0, 5.8 standard
+errors, positive in every season tested. Rank correlation with the miss is **0.182**, which
+edges out the entire eight-signal model below while being one line of arithmetic. The
+depth-chart pay curve is refit with each test season removed, so it never scores a year it
+has already seen.
+
+**Low LIFT is not a sell signal.** Trey McBride, Ja'Marr Chase and Puka Nacua sit at the
+bottom of it. They are among the best players in the league; there is simply no surprise
+left in their role. LIFT predicts *beating the projection*, not *being good*.
+
+#### The version that failed first
+
+The first attempt, RUNWAY, multiplied a player's efficiency over his own teammates by the
+opportunity going spare. It returned **+1.1 points**, well inside the noise. The post-mortem
+is the useful half: efficiency over one's own teammates graded out **negative** (−0.050).
+Coaches do not hand work to the efficient backup, and a high rate on few touches is mostly
+small sample. The stat that works measures the *job*, not the running.
 
 ### The Leap: situational signals
 
