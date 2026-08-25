@@ -52,8 +52,10 @@ kicking — re-scored under the league's exact rules.
    metric against next-season output (`analyze.py`).
 3. **Strip touchdown luck** — build expected fantasy points from volume alone, then test
    whether the residual repeats (`model2.py`). It mostly does not.
-4. **Project** — one gradient-boosted model per position for points per game, a second for
-   games played, blended 75/25 with last season's actual points (`project2026.py`).
+4. **Project** — one gradient-boosted model per position for points per game, blended 75/25
+   with last season's actual points; expected games from an empirical durability curve
+   conditioned on the depth chart, because the model for it lost to arithmetic
+   (`project2026.py`, `games_test.py`).
 5. **Replay history** — strategies compete against each other across replayed seasons using
    real weekly scores, with lineups set up front rather than with hindsight
    (`auction_sim_real.py`).
@@ -74,8 +76,11 @@ per touch (0.23) are close to noise. Players who most outscored their own usage 
 2–3 points per game the following season, every position, every era.
 
 **Availability is a projection input, not a footnote.** A running back who plays a full
-season averages **12.7 games** the next one. Receivers 13.1, quarterbacks 13.6. Every
-projection here is points per game times *expected* games.
+season averages **12.7 games** the next one; one with three full seasons behind him averages
+14.2, and one who missed most of last year but still holds the job averages far more than
+his games played suggest. Every projection here is points per game times *expected* games,
+and that second term comes from the empirical durability curve described under Pricing —
+not from a model, which lost to arithmetic.
 
 **Kicker and defense are coin flips.** Year-over-year rank correlation of 0.33 and 0.26.
 The board holds exactly ten of each at $1 — which is what this room pays: all ten defenses
@@ -91,6 +96,44 @@ exactly ten kickers and ten defenses at $1 each.
 
 That lands at roughly **28% of your money on quarterbacks, 28% on backs, 36% on receivers,
 7% on tight ends, and 1% on kicker and defense combined.**
+
+#### Corrected: the games-played model lost to two lines of arithmetic
+
+Projected points are points-per-game times **expected games**, so the games estimate is
+half of every number on this board. It was also the half nobody validated, and it did not
+survive being asked to. Two of its 2026 outputs made the case on their own:
+
+    Joe Burrow      played  8 games in 2025  ->  projected 16.0
+    Jayden Daniels  played  7 games in 2025  ->  projected  8.7
+
+Same evidence, opposite conclusions. A tree handed a dozen correlated features will invent
+structure in noise, and availability is mostly noise.
+
+On the loss that actually matters — error in projected **season points** across the 150
+players who get priced — the gradient-boosted model, a linear shrinkage and an empirical
+curve are indistinguishable: **63.4 / 63.1 / 63.4** points over ten holdout seasons. So the
+choice is not made on accuracy, because accuracy does not move. It is made on **coherence**,
+and the other two fail it: the model is non-monotone (above), and linear shrinkage fitted to
+MAE on the crowded middle blows out the tail, projecting 15.8 games for a back with three
+full seasons behind him against an empirical 14.2.
+
+What ships is the empirical curve itself — an isotonic fit of next-season games on a 2-1-1
+weighted average of the last three seasons, per position. Monotone by construction.
+
+**Then the depth chart, which fixed the real damage.** A curve conditioned on games played
+alone cannot tell a franchise starter who got hurt from a backup who lost his job, and it
+buried Lamar Jackson, Jayden Daniels and Joe Burrow at a few dollars each. The split is
+large:
+
+| QB who played 1–9 games | next season |
+|---|---|
+| …and is the preseason QB1 | **10.8** games (n=29) |
+| …and is the QB2 | 4.7 games (n=84) |
+
+Blending the games-only curve with the mean for the player's (depth, games) cell, weighted
+`n / (n + 20)`, improves holdout MAE from **3.619 to 3.516** games and is better or equal in
+every test season. Depth charts only exist from 2021, which is why this is a correction on
+top of the curve rather than the curve itself.
 
 #### Corrected: the projections were too timid at the top
 
@@ -400,10 +443,10 @@ were worth going into 2025:
 
 | | Paid | Board said | On the dollar |
 |---|---|---|---|
-| QB | 17.9% | 28.4% | **63¢** |
-| TE | 4.2% | 10.1% | **41¢** |
-| WR | 41.6% | 40.1% | 104¢ |
-| RB | 36.3% | 21.3% | **170¢** |
+| QB | 17.9% | 27.6% | **65¢** |
+| TE | 4.2% | 11.2% | **37¢** |
+| WR | 41.6% | 38.9% | 107¢ |
+| RB | 36.3% | 22.4% | **162¢** |
 
 The biggest bargains in the room were quarterbacks — Goff at $9 against $41 of value,
 Mayfield at $12 against $42. **All eight of the biggest overpays were running backs**:
@@ -417,7 +460,7 @@ bidding against rather than a rule imported from somewhere else.
 
 Note what the pricing fix did to this table. Under the old flat curve the room read as
 overpaying receivers by 11% as well; with replacement drawn correctly, receivers come out
-at **104¢ — essentially fair** — and the whole distortion resolves to two positions. The
+at **107¢ — near fair** — and the whole distortion resolves to two positions. The
 conclusion got sharper, not softer, which is the useful kind of correction.
 
 The Auction Room starts from these ratios and shrinks toward tonight's sales as they
@@ -425,6 +468,34 @@ accumulate; after about eight sales at a position the live read dominates. One c
 holding: part of the running-back gap is the projections being conservative about elite
 players, since they multiply points per game by *expected* games. The quarterback and tight
 end gaps cannot be explained that way.
+
+### Sanity check against the wider market
+
+Every number above is fitted to this league's own rules and this room's own sheet, which is
+the point — but it also means nothing external ever contradicts it. So: how does the board
+compare with published 2QB/superflex auction guidance?
+
+| | consensus (12-team superflex) | this board (10-team, 2QB, full PPR) |
+|---|---|---|
+| QB1 price | $42–65 | **$48** |
+| QB tier 2 | $36–48 | Herbert $32, Mahomes $23 |
+| QB tier 3 | $20–34 | Goff $30, Mayfield $40 |
+| Share of budget at QB | 35–45% | **24%** |
+
+The top of the quarterback market lands inside the published range. The **share** does not,
+and that gap is expected rather than reassuring: consensus figures are for 12-team rooms,
+where replacement at every position is thinner and quarterbacks are correspondingly scarcer.
+Ten teams means better streamers and a lower ceiling on what any one starter is worth.
+
+Where the board disagrees hardest is on **players coming off injury**. Consensus has Lamar
+Jackson, Jayden Daniels and Joe Burrow near the top of the position; this board has them at
+$9, $8 and $0. That is not a bug and it is not shrinkage — it is the durability curve doing
+what the data says, and the data says a quarterback who missed most of a season plays 10.8
+games the next one even when he keeps the job. Consensus projects those players healthy.
+
+**Treat that as a live disagreement, not a verdict.** If you believe Jackson is a 16-game
+quarterback, the board is wrong about him and you should bid accordingly — it is one input,
+and this is the input it is least sure of.
 
 ## Reproducing it
 
@@ -451,6 +522,7 @@ python load.py                  # LOAD, and the price-held-fixed control
 python corrmatrix.py            # the 40-metric correlation matrix
 python standouts.py             # the corners of the price-vs-LOAD chart
 python playergrid.py            # the player-by-metric grid
+python games_test.py            # does the games model beat arithmetic? (it does not)
 python decompress.py            # fit the per-position spread correction (run before the board)
 python price_shape2.py          # check the price curve against the room's own sheet
 python expected_price.py        # value vs what this room actually pays

@@ -67,6 +67,32 @@ def hgb(depth=4, it=400):
                                          min_samples_leaf=20, l2_regularization=1.0, random_state=0)
 
 
+# Expected games comes from the empirical durability curve rather than a fitted
+# model — see the note in project2026.py. Accuracy is a wash (63.4 vs 63.1 vs 63.4
+# points of error across the priced pool), so the choice is made on coherence, and
+# the curve is the only one of the three that is monotone. Fitted here on data that
+# predates the season being projected, like everything else in this file.
+from sklearn.isotonic import IsotonicRegression
+
+GW = (3.0, 2.0, 1.0)
+
+
+def _games_blend(df):
+    num = np.zeros(len(df))
+    den = np.zeros(len(df))
+    for c, w in zip(("games", "games_l1", "games_l2"), GW):
+        if c not in df.columns:
+            continue
+        v = df[c].values.astype(float)
+        m = np.isfinite(v)
+        num[m] += w * v[m]
+        den[m] += w
+    return np.where(den > 0, num / np.maximum(den, 1e-9), np.nan)
+
+
+P["g_blend"] = _games_blend(P)
+
+
 def board_for(season):
     """Preseason projection for `season`, trained only on data that predates it."""
     out = []
@@ -77,9 +103,11 @@ def board_for(season):
         if len(tr) < 80 or len(te) == 0:
             continue
         mp = hgb().fit(tr[f], tr.y_ppg)
-        mg = hgb(3, 250).fit(tr[f], tr.y_games)
+        gtr = tr[tr.y_games.notna() & tr.g_blend.notna()]
+        gcur = IsotonicRegression(increasing=True, out_of_bounds="clip").fit(
+            gtr.g_blend, gtr.y_games)
         proj_ppg = mp.predict(te[f])
-        proj_g = np.clip(mg.predict(te[f]), 0, 17)
+        proj_g = np.clip(gcur.predict(_games_blend(te)), 0, 17)
         model_total = proj_ppg * proj_g
         naive_total = te.fpts.values
         # the blend that won the bake-off: mostly model, anchored by last year's real total

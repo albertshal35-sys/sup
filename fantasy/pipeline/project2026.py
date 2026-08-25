@@ -44,18 +44,152 @@ def hgb(depth=4, it=400):
                                          min_samples_leaf=20, l2_regularization=1.0, random_state=0)
 
 
+# ---------------------------------------------------------------- games played
+# Projected points are points-per-game times EXPECTED GAMES, so the games estimate is
+# half of every number on this board. It was also the half nobody validated.
+#
+# On the loss that actually matters — error in projected season points across the 150
+# players who get priced — a gradient-boosted games model, a linear shrinkage and an
+# empirical curve are indistinguishable: 63.4 / 63.1 / 63.4 points over ten holdout
+# seasons. Availability is close to unforecastable, and no estimator rescues that.
+#
+# So the choice is not made on accuracy, because accuracy does not move. It is made on
+# COHERENCE, and the other two fail it:
+#
+#   the model     projected 16.0 games for a QB who played 8, and 8.7 for one who
+#                 played 7 — same evidence, opposite answers, because a tree given a
+#                 dozen correlated features invents structure in the noise
+#   linear shrink projected 15.8 games for a back who had played three full seasons,
+#                 against an empirical 14.2 — fitting MAE on the crowded middle blows
+#                 out the tail, which is exactly where the money is
+#
+# What ships is the empirical curve itself: an isotonic fit of next-season games on a
+# 2-1-1 weighted average of the last three seasons, per position. Monotone by
+# construction, so more games played can never mean fewer games projected, and it
+# reproduces the real tail (a three-year durable back gets 14.2, not 15.8).
+from sklearn.isotonic import IsotonicRegression
+
+GW = (3.0, 2.0, 1.0)
+
+
+def games_blend(df):
+    num = np.zeros(len(df))
+    den = np.zeros(len(df))
+    for c, w in zip(("games", "games_l1", "games_l2"), GW):
+        if c not in df.columns:
+            continue
+        v = df[c].values.astype(float)
+        m = np.isfinite(v)
+        num[m] += w * v[m]
+        den[m] += w
+    return np.where(den > 0, num / np.maximum(den, 1e-9), np.nan)
+
+
+P["g_blend"] = games_blend(P)
+
+# The curve above conditions on games played alone, which cannot tell a franchise
+# starter who got hurt from a backup who lost his job. It buried Lamar Jackson,
+# Jayden Daniels and Joe Burrow — all of whom missed most of 2025 — at a few dollars
+# each, against an industry consensus that has them near the top of the position.
+#
+# The depth chart separates them, and the effect is large:
+#
+#   QB who played 1-9 games, and is the preseason QB1   -> 10.8 games (n=29)
+#   QB who played 1-9 games, and is the QB2             ->  4.7 games (n=84)
+#
+# So blend the games-only curve with the mean for the player's (depth, games) cell,
+# weighted by how much evidence that cell actually has: n / (n + 20). Holdout MAE
+# over 2021-2024 improves from 3.619 to 3.516 games, better or equal in every season.
+# Depth charts only exist from 2021, which is why this is a correction on top of the
+# curve rather than the curve itself.
+DEPTH_K = 20.0
+
+
+def _depth_chart(year):
+    """Preseason snapshot; nflverse changed format mid-decade, so read either."""
+    try:
+        d = pd.read_csv(f"data/depth_{year}.csv", low_memory=False)
+    except Exception:
+        return None
+    if "gsis_id" not in d.columns:
+        return None
+    if "pos_abb" in d.columns:
+        d = d[d.pos_abb.isin(["QB", "RB", "WR", "TE"])].copy()
+        d["dt"] = pd.to_datetime(d.get("dt"), errors="coerce")
+        d = d.sort_values("dt").groupby("gsis_id", as_index=False).head(1)
+        d = d.rename(columns={"pos_rank": "depth"})
+    else:
+        d = d[d.position.isin(["QB", "RB", "WR", "TE"])].copy()
+        if "week" in d.columns:
+            d = d[d.week <= 1] if (d.week <= 1).any() else d
+            d = d.sort_values("week").groupby("gsis_id", as_index=False).head(1)
+        d = d.rename(columns={"depth_team": "depth"})
+    d["depth"] = pd.to_numeric(d["depth"], errors="coerce")
+    d = d.dropna(subset=["gsis_id", "depth"]).sort_values("depth")
+    d = d.groupby("gsis_id", as_index=False).head(1)
+    return d[["gsis_id", "depth"]].rename(columns={"gsis_id": "player_id"}).assign(season=year)
+
+
+_dep = [x for x in (_depth_chart(y) for y in range(2021, 2027)) if x is not None]
+DEPTHC = pd.concat(_dep, ignore_index=True) if _dep else pd.DataFrame(
+    columns=["player_id", "depth", "season"])
+# a chart for season S describes the season being projected, so it attaches to row S-1
+DEPTHC["season"] = DEPTHC.season - 1
+DEPTHC["db"] = np.clip(DEPTHC.depth, 1, 3)
+
+
+def _gbucket(g):
+    return np.select([np.asarray(g) >= 15, np.asarray(g) >= 10], [2, 1], 0)
+
+
+_dtrain = P.merge(DEPTHC[["player_id", "season", "db"]], on=["player_id", "season"], how="left")
+_dtrain = _dtrain[_dtrain.db.notna() & _dtrain.y_games.notna()]
+_dtrain["gbk"] = _gbucket(_dtrain.games)
+DEPTH_CELL = _dtrain.groupby(["position", "db", "gbk"]).y_games.agg(["mean", "size"])
+print("depth-conditioned games (position, depth, games-band): "
+      f"{len(DEPTH_CELL)} cells from {len(_dtrain)} player-seasons")
+
+
+def apply_depth(te, pos, base):
+    """Pull the games-only estimate toward the player's (depth, games) cell mean."""
+    d = te[["player_id", "season"]].merge(
+        DEPTHC[["player_id", "season", "db"]], on=["player_id", "season"], how="left")
+    db = d.db.values
+    gbk = _gbucket(te.games.values)
+    out = base.copy()
+    for i in range(len(te)):
+        if not np.isfinite(db[i]):
+            continue
+        key = (pos, float(db[i]), int(gbk[i]))
+        if key not in DEPTH_CELL.index:
+            continue
+        m, n = DEPTH_CELL.loc[key, "mean"], DEPTH_CELL.loc[key, "size"]
+        w = n / (n + DEPTH_K)
+        out[i] = w * m + (1 - w) * base[i]
+    return out
+
+GAMES_CURVE = {}
+for _p in ("QB", "RB", "WR", "TE"):
+    _t = P[(P.position == _p) & P.y_games.notna() & P.g_blend.notna()]
+    GAMES_CURVE[_p] = IsotonicRegression(increasing=True, out_of_bounds="clip").fit(
+        _t.g_blend, _t.y_games)
+print("expected games by durability (3-season 2-1-1 average -> next season):")
+for _p in ("QB", "RB", "WR", "TE"):
+    print(f"  {_p}: " + "  ".join(
+        f"{x}g->{GAMES_CURVE[_p].predict([x])[0]:.1f}" for x in (17, 15, 12, 9, 6)))
+
 proj_rows = []
 for pos in ["QB", "RB", "WR", "TE"]:
     f = [c for c in COMMON + POSF[pos] if c in P.columns]
     tr = P[(P.position == pos) & P.y_fpts.notna()]
     mp = hgb().fit(tr[f], tr.y_ppg)
-    mg = hgb(3, 250).fit(tr[f], tr.y_games)
     for src_season, decay in [(2025, 1.0), (2024, 0.88)]:
         te = P[(P.position == pos) & (P.season == src_season)].copy()
         if len(te) == 0:
             continue
         te["proj_ppg"] = mp.predict(te[f]) * decay
-        te["proj_g"] = np.clip(mg.predict(te[f]), 0, 17)
+        te["proj_g"] = np.clip(apply_depth(
+            te, pos, GAMES_CURVE[pos].predict(games_blend(te))), 0, 17)
         te["src"] = src_season
         proj_rows.append(te[["player_id", "position", "proj_ppg", "proj_g", "src", "age",
                              "ppg", "games", "fpts", "tgt_pg", "car_pg", "target_share",
