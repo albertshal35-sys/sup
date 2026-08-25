@@ -2,6 +2,13 @@
 p = "app_template.html"
 s = open(p).read()
 
+# One-shot migration, not a pipeline stage: it inserts the Leap tab into the
+# template. Running it on an already-migrated template appends a second
+# renderLeap() that shadows whatever the first one has since become, which is
+# exactly how the LOAD card silently disappeared once. Refuse instead.
+if "function renderLeap" in s:
+    raise SystemExit("tab3.py: template already has the Leap tab — nothing to do")
+
 # ---- tab button
 s = s.replace(
     '<button role="tab" id="tab-draft" aria-selected="false" aria-controls="panel-draft">Auction Room</button>',

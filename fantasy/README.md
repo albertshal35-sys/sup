@@ -77,18 +77,52 @@ season averages **12.7 games** the next one. Receivers 13.1, quarterbacks 13.6. 
 projection here is points per game times *expected* games.
 
 **Kicker and defense are coin flips.** Year-over-year rank correlation of 0.33 and 0.26.
-They are priced at a dollar or two and the Auction Room caps your bid on them at $2.
+The board holds exactly ten of each at $1 — which is what this room pays: all ten defenses
+went for $1 in 2025 and eight of nine kickers did. The Auction Room caps your bid at $2.
 
 ### Pricing
 
-A player's price is what he scores above the last man bought at his position — not above
-the last *starter*, because everyone below that line costs a dollar. Those surpluses are
-scaled so the league's whole discretionary budget (total money minus the $1 each roster
-spot must reserve) is exactly accounted for. The board sums to $1,995 against $2,000 in
-the room.
+A player's price is what he scores above **replacement** — the last man who actually starts
+somewhere, flex included. Those surpluses are scaled so the league's whole discretionary
+budget (total money minus the $1 each roster spot must reserve) is exactly accounted for.
+The board sums to $2,000 against $2,000 in the room, prices exactly 170 players, and holds
+exactly ten kickers and ten defenses at $1 each.
 
-That lands at roughly **24% of your money on quarterbacks, 28% on backs, 36% on receivers,
-10% on tight ends, and 2% on kicker and defense combined.**
+That lands at roughly **28% of your money on quarterbacks, 28% on backs, 36% on receivers,
+7% on tight ends, and 1% on kicker and defense combined.**
+
+#### Corrected: the price curve used to be far too flat
+
+An earlier version measured surplus against the last man **bought** at each position
+(~rank 150 of the skill pool) rather than the last man who **starts** (~rank 60), on the
+reasoning that everyone below that line costs a dollar anyway. That had it exactly
+backwards — everyone below the line costing a dollar is precisely *why* replacement belongs
+there. Drawing it at rank 150 left almost every rostered player holding a large surplus, so
+the money spread evenly instead of concentrating.
+
+Checked against this room's own 2025 draft sheet:
+
+| rank | this room paid | old board | corrected |
+|---|---|---|---|
+| 1 | $60 | $37 | **$56** |
+| 10 | $44 | $30 | **$42** |
+| 30 | $27 | $23 | **$30** |
+| 50 | $12 | $15 | $15 |
+| 110 | $1 | $7 | **$1** |
+
+Mean error against the room's curve falls from **$4.53 a rank to $1.04**, the top-ten share
+of the budget goes from 16.6% to 24.0% against the room's 26.1%, and the number of players
+priced at a dollar goes from 15 to 82 against the room's 63. No exponent or fudge factor is
+involved: sweeping one bought another $0.08 a rank, which is not worth a parameter fitted to
+a single draft. The replacement levels were already computed correctly further up the file —
+the pricing block simply recomputed a different, wrong cut and ignored them.
+
+The same bug was in `auction_sim_real.py` and `room_bias2.py`, so every strategy finding and
+every room ratio below was recomputed after the fix. Two secondary fixes came with it:
+kickers and defenses were bidding against skill players for a share of surplus, which put
+six extra kickers on the board and $72 into positions this room pays $22 for, and several
+downstream filters used `auction >= 2` as a proxy for "draftable" — fine under a flat curve,
+wrong once 82 of the 170 rostered players sit at exactly $1.
 
 Ten teams matters more than it sounds. Every replacement level rises, because a shallower
 league starts fewer players at each position: against a twelve-team room, quarterback
@@ -130,15 +164,15 @@ a ten-team room; the orderings held.
 
 Two results survive every robustness check:
 
-**Track inflation (+4.1).** The largest durable edge. Bidders who re-priced the board as
+**Track inflation (+6.9).** The largest durable edge. Bidders who re-priced the board as
 money left the room beat bidders who stuck to preseason values. When early lots go cheap
 the leftover cash has to land on somebody. This is why the app asks you to log the players
 you *lose* — those sales tell you more than your own do.
 
-**Do not play stars and scrubs (−9.5).** The worst strategy tested by a wide margin. This
-lineup starts nine and flexes a tenth; three stars and six holes loses more in the holes
-than it gains at the top. The best-performing honest strategy spent about $156 of $200 and
-finished around 3 QB, 4 RB, 6 WR, 2 TE.
+**Do not play stars and scrubs (−6.9).** The worst strategy tested. This lineup starts nine
+and flexes a tenth; three stars and six holes loses more in the holes than it gains at the
+top. The best-performing honest strategy spent about $163 of $200 and finished around
+3 QB, 4 RB, 6 WR, 2 TE.
 
 **And one result that did not survive.** An earlier version of this tool told you to pay
 25% over list for quarterbacks, on the strength of a +4.6 point win rate in that
@@ -317,19 +351,25 @@ were worth going into 2025:
 
 | | Paid | Board said | On the dollar |
 |---|---|---|---|
-| QB | 17.9% | 29.0% | **62¢** |
-| TE | 4.2% | 8.7% | **48¢** |
-| WR | 41.6% | 37.5% | 111¢ |
-| RB | 36.3% | 24.8% | **146¢** |
+| QB | 17.9% | 31.5% | **57¢** |
+| TE | 4.2% | 8.0% | **53¢** |
+| WR | 41.6% | 41.3% | 101¢ |
+| RB | 36.3% | 19.2% | **189¢** |
 
-Six of the eight biggest bargains in the room were quarterbacks — Tua at $2 against $26 of
-value, Goff at $9 against $31, Mayfield at $12 against $31. The eight biggest overpays were
-all elite backs and receivers: Gibbs $60, McCaffrey $43, Bijan $60, Saquon $58.
+The biggest bargains in the room were quarterbacks — Goff at $9 against $41 of value,
+Mayfield at $12 against $42. **All eight of the biggest overpays were running backs**:
+McCaffrey $43 against $1, Gibbs $60 against $20, Bijan $60 against $30, Saquon $58 against
+$29, Chase Brown $40 against $17.
 
 **This league bids a two-quarterback format as though it were a normal one**, and pays for
 it at running back. That is a large, specific, repeatable edge, and it is the one place a
 positional lean is justified — because it is a measurement of the nine people you are
 bidding against rather than a rule imported from somewhere else.
+
+Note what the pricing fix did to this table. Under the old flat curve the room read as
+overpaying receivers by 11% as well; with replacement drawn correctly, receivers come out
+at **101¢ — essentially fair** — and the whole distortion resolves to two positions. The
+conclusion got sharper, not softer, which is the useful kind of correction.
 
 The Auction Room starts from these ratios and shrinks toward tonight's sales as they
 accumulate; after about eight sales at a position the live read dominates. One caveat worth
@@ -362,6 +402,7 @@ python load.py                  # LOAD, and the price-held-fixed control
 python corrmatrix.py            # the 40-metric correlation matrix
 python standouts.py             # the corners of the price-vs-LOAD chart
 python playergrid.py            # the player-by-metric grid
+python price_shape2.py          # check the price curve against the room's own sheet
 python build_app.py             # emit the app
 ```
 

@@ -88,7 +88,14 @@ print("\n" + "=" * 70)
 print("WHERE THIS ROOM'S MONEY WENT, 2025")
 print("=" * 70)
 tot = hit.price.sum()
-mine = dict(QB=23.9, RB=28.5, WR=35.8, TE=9.7)
+# Read the board's own split rather than hardcoding it, so a change to the pricing
+# cannot silently leave this comparison measuring the previous curve.
+_bd = pd.read_parquet("out/board2026.parquet")
+_bd = _bd[(_bd.auction >= 1) & _bd.position.isin(["QB", "RB", "WR", "TE"])]
+_tot = _bd.auction.sum()
+mine = {p: round(_bd.loc[_bd.position == p, "auction"].sum() / _tot * 100, 1)
+        for p in ("QB", "RB", "WR", "TE")}
+print("board split (skill only):", mine)
 print(f"  {'pos':<5}{'paid':>8}{'share':>9}{'board says':>12}{'gap':>8}")
 bias = {}
 for p in ("QB", "RB", "WR", "TE"):

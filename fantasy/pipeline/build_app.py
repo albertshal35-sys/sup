@@ -25,6 +25,7 @@ LOADJ = json.load(open("out/research_load.json"))
 CORR = json.load(open("out/research_corr.json"))
 STAND = json.load(open("out/research_standouts.json"))
 GRID = json.load(open("out/research_grid.json"))
+PSHAPE = json.load(open("out/research_priceshape.json"))
 LOADP = pd.read_parquet("out/load.parquet")
 LOADP = LOADP[LOADP.season == 2026][["player_id", "LOAD", "load_raw", "lift_raw",
                                      "role_opp", "opp_prev", "depth"]]
@@ -225,7 +226,7 @@ RESEARCH["load"] = dict(
                   team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
                   load=clean(r.LOAD, 0), raw=clean(r.load_raw, 2),
                   role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
-             for _, r in board[(board.auction >= 2) & board.LOAD.notna()]
+             for _, r in board[(board.auction >= 1) & board.LOAD.notna()]
                               .nlargest(16, "LOAD").iterrows()],
     maxed=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
                 team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
@@ -241,6 +242,7 @@ RESEARCH["corr"] = dict(
     independence=CORR["independence"])
 RESEARCH["standouts"] = STAND
 RESEARCH["grid"] = GRID
+RESEARCH["priceshape"] = PSHAPE
 print("matrix:", len(CORR["labels"]), "metrics |", len(CORR["dupes"]), "duplicate pairs |",
       len(STAND["scatter"]), "scatter points |", len(GRID["rows"]), "grid rows")
 

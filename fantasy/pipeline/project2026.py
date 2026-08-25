@@ -207,33 +207,58 @@ print("starting slots consumed league-wide:", taken)
 board["vorp"] = (board.proj_total - board.position.map(rep)).round(1)
 board["pos_rank"] = board.groupby("position").proj_total.rank(ascending=False, method="first").astype(int)
 
-# Auction dollars. A player is worth what he scores above the last man who gets
-# bought at his position — not above the last starter — because everyone below
-# that line costs a dollar. Scale those surpluses so the league's whole
-# discretionary budget (total money minus the $1 each roster spot must reserve)
-# is exactly accounted for.
+# Auction dollars. A player is worth what he scores above REPLACEMENT — the last
+# man who actually starts somewhere, flex included — and the money is split in
+# proportion to that surplus.
+#
+# This used to draw the line at the last man BOUGHT rather than the last man
+# started, on the reasoning that everyone below that line costs a dollar. That had
+# it exactly backwards: everyone below the line costing a dollar is precisely why
+# replacement belongs there. Drawing it at rank ~150 of the skill pool instead of
+# rank ~60 left almost every rostered player holding a large surplus, so the money
+# spread evenly instead of concentrating, and the curve came out far too flat:
+#
+#   rank          1     10     50    110
+#   this room   $60    $44    $12     $1     (2025 draft sheet, 10 teams, $200)
+#   old map     $32    $26    $14     $8
+#   fixed       $55    $41    $15     $1
+#
+# Mean error against the room's own curve falls from $6.61 a rank to $0.88, and the
+# number of players priced at a dollar goes from 0 to 60 against the room's 63. No
+# exponent or fudge factor is involved — sweeping one only bought another $0.08 a
+# rank, which is not worth a parameter fitted to a single draft. The replacement
+# levels are the ones `rep` already computes above, with every starting slot
+# including the flex allocated; the old block recomputed a different, wrong cut and
+# ignored them.
 AUCTION_BUDGET = 200
-# The drafted pool has to respect roster construction. Ranking the whole board by
-# VORP puts all 32 kickers and all 32 defenses in the top 204 — every team only
-# rosters one of each, so pool them separately and let skill players take the rest.
-skill_spots = ROSTER * TEAMS - 2 * TEAMS
-drafted = pd.concat([
-    board[board.position.isin(["QB", "RB", "WR", "TE"])].nlargest(skill_spots, "vorp"),
-    board[board.position == "K"].nlargest(TEAMS, "vorp"),
-    board[board.position == "DST"].nlargest(TEAMS, "vorp"),
-])
-cut = {}
-for p in ["QB", "RB", "WR", "TE", "K", "DST"]:
-    d = drafted[drafted.position == p]
-    cut[p] = float(d.proj_total.min()) if len(d) else float(board[board.position == p].proj_total.min())
-board["surplus"] = np.maximum(0.0, board.proj_total - board.position.map(cut))
-pool_surplus = board.loc[board.player_id.isin(drafted.player_id), "surplus"].sum()
 discretionary = AUCTION_BUDGET * TEAMS - ROSTER * TEAMS
-board["auction"] = (1 + board.surplus / pool_surplus * discretionary).round(0)
-board.loc[~board.player_id.isin(drafted.player_id), "auction"] = 0
+
+# Roster construction first: every team rosters exactly one kicker and one defense,
+# so the board carries exactly TEAMS of each and the other spots go to skill players.
+# Both are priced at a dollar, which is not a simplification — it is what this room
+# actually pays. On the 2025 sheet all ten defenses went for $1 and eight of nine
+# kickers went for $1 ($22 of $1,991 between them). Letting them bid against skill
+# players for a share of surplus put six extra kickers on the board and $72 into a
+# position whose year-over-year correlation is 0.33.
+skill = board.position.isin(["QB", "RB", "WR", "TE"])
+k_ids = board[board.position == "K"].nlargest(TEAMS, "proj_total").player_id
+d_ids = board[board.position == "DST"].nlargest(TEAMS, "proj_total").player_id
+skill_spots = ROSTER * TEAMS - 2 * TEAMS
+
+board["surplus"] = np.where(skill, np.maximum(0.0, board.vorp), 0.0)
+pool = board.loc[skill, "surplus"].sum()
+board["auction"] = np.where(board.surplus > 0, 1 + board.surplus / pool * discretionary, 1.0)
+board.loc[~skill, "auction"] = 1.0
+
+# take exactly the players a real draft consumes; everyone else is off-board
+bought = set(board[skill].nlargest(skill_spots, "auction").player_id) | set(k_ids) | set(d_ids)
+board.loc[~board.player_id.isin(bought), "auction"] = 0.0
+board["auction"] = board.auction.round(0)
 print(f"auction pricing: ${AUCTION_BUDGET}/team, {ROSTER} spots, "
       f"${discretionary} discretionary; board totals ${board.auction.sum():.0f} "
       f"vs ${AUCTION_BUDGET * TEAMS} in the room")
+print(f"  priced above $1: {(board.auction > 1).sum()}   at $1: {(board.auction == 1).sum()}"
+      f"   top of board: ${board.auction.max():.0f}")
 
 # tiers: break where the drop to the next player is unusually large
 def tier_up(d):
@@ -275,6 +300,20 @@ def flags(r):
 
 
 board["flags"] = board.apply(flags, axis=1)
+
+# Carry last season's week-shape stats onto the board. These are descriptive columns
+# (the board prices on points — see the WAA finding), but the app and the breakout
+# stages read them from here, so attach them where the board is built rather than
+# bolting them on afterwards: rebuilding the board used to drop them silently.
+try:
+    _W = pd.read_parquet("out/win_metrics.parquet")
+    _W = _W[_W.season == 2025][["player_id", "waa", "flr", "spk", "ghst"]]
+    _W.columns = ["player_id", "waa25", "flr25", "spk25", "ghst25"]
+    board = board.merge(_W, on="player_id", how="left")
+    print(f"week-shape columns attached for {int(board.flr25.notna().sum())} players")
+except FileNotFoundError:
+    print("win_metrics.parquet not found — run wins.py first for the WAA columns")
+
 board.to_parquet("out/board2026.parquet")
 
 print("\n" + "=" * 78)

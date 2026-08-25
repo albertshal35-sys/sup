@@ -34,7 +34,7 @@ b["z_price"] = z("auction")
 b["z_load"] = z("LOAD")
 b["gap"] = b.z_load - b.z_price          # the one gap that survived the control
 
-sel = b[(b.auction >= 2) & b.LOAD.notna()].copy()
+sel = b[(b.auction >= 1) & b.LOAD.notna()].copy()
 print(f"{len(sel)} priced players on the chart")
 
 CORNERS = [

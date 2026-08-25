@@ -19,8 +19,10 @@ for i, r in order.iterrows():
     if counts[r.position] >= cap[r.position]:
         continue
     keep.append(i); counts[r.position] += 1
-cut = {p: float(b.loc[keep][b.loc[keep].position == p].proj_blend.min()) for p in cap}
-b["surplus"] = np.maximum(0.0, b.proj_blend - b.position.map(cut))
+# Surplus over REPLACEMENT (the last man who starts), not over the last man kept.
+# The latter leaves everyone rostered holding a big surplus and flattens the curve,
+# which is the pricing bug corrected in project2026.py.
+b["surplus"] = np.maximum(0.0, b.vorp)
 tot = b.loc[keep, "surplus"].sum()
 b["price"] = 1.0 + b.surplus / tot * (TEAMS * BUDGET - TEAMS * SPOTS)
 b.loc[~b.index.isin(keep), "price"] = 1.0

@@ -14,7 +14,9 @@ board = pd.read_parquet("out/board2026.parquet")
 b = board[["player_id", "name", "position", "team", "bye", "auction", "proj_total",
            "proj_ppg", "proj_g", "vorp", "pos_rank", "age26", "flr25", "ghst25"]]
 m = bo.merge(b, on="player_id", how="inner", suffixes=("", "_b"))
-m = m[m.auction >= 2]                       # has to be someone you would actually bid on
+m = m[m.auction >= 1]   # on the board at all; under replacement-based pricing
+                        # 82 of the 170 rostered players sit at exactly $1, and the
+                        # late-round flier is what a breakout list is for
 print(f"{len(m)} priced players carry a situational read")
 
 # Dollars are the currency here, so convert at the MARGIN the board itself uses:

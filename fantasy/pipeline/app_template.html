@@ -573,8 +573,10 @@ function renderBoard() {
       <h1>Every player, priced in dollars</h1>
       <p class="hint" style="max-width:70ch;margin-top:.4rem">
         Auction values for <strong>this</strong> lineup — 2QB, 2RB, 3WR, 1TE, 1 flex, full PPR, ${S.teams} teams at
-        $${S.budget} each. A player's price is what he scores above the last man bought at his position, scaled so
-        the room's whole budget is accounted for; the dollars on this page sum to the dollars in the league.
+        $${S.budget} each. A player's price is what he scores above <em>replacement</em> — the last man who
+        actually starts somewhere, flex included — scaled so the room's whole budget is accounted for. The
+        dollars on this page sum to the dollars in the league, and the ${DATA.players.filter(p => p.auc === 1).length} men with no surplus
+        left cost a dollar, which is what they cost in a real room too.
         Change the team count in the Auction Room and the ceilings follow, but the printed prices are built for
         a ${DATA.meta.teams}-team room.
         Projections come from gradient-boosted models trained on every player season from 1999 to 2025
@@ -800,6 +802,27 @@ function renderFindings() {
       <dt>Chase safe floors, 2 of 12</dt><dd class="num">${R.field.safe_rare >= 0 ? "+" : ""}${fmt(R.field.safe_rare, 1)} pp</dd>
       <dt>…10 of 12</dt><dd class="num">${fmt(R.field.safe_common, 1)} pp</dd>
     </dl>
+  </div>
+
+  <div class="finding" style="border-top-color:var(--danger)">
+    <p class="eyebrow" style="color:var(--danger)">Corrected — the price curve was too flat</p>
+    <div class="bignum">$${fmt(R.priceshape.err_old, 2)} → $${fmt(R.priceshape.err_new, 2)}</div>
+    <p>An earlier version of this board measured a player's surplus against the last man <em>bought</em> at his
+    position rather than the last man who <em>starts</em>. That left almost every rostered player holding a big
+    surplus, so the money spread evenly instead of concentrating, and the top of the board came out about 40%
+    too cheap. Checked against this room's own 2025 sheet, the old curve was
+    $${fmt(R.priceshape.err_old, 2)} a rank off; the corrected one is $${fmt(R.priceshape.err_new, 2)}.
+    No exponent or fudge factor was involved — the replacement levels were already computed correctly, and the
+    pricing simply was not using them.</p>
+    <div class="tablewrap"><table class="plain">
+      <thead><tr><th class="l">rank</th><th>this room</th><th>old</th><th>now</th></tr></thead>
+      <tbody>${R.priceshape.curve.filter(c => [1, 10, 30, 50, 110].includes(c.rank)).map(c => `<tr>
+        <td class="l">${c.rank}</td><td class="num">$${c.room}</td>
+        <td class="num" style="color:var(--danger)">$${c.old}</td>
+        <td class="num" style="color:var(--accent);font-weight:650">$${c.new}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <p class="hint" style="margin-top:.4rem">Players priced at a dollar: this room ${R.priceshape.at1_room},
+      old board ${R.priceshape.at1_old}, now ${R.priceshape.at1_new}.</p>
   </div>
 
   <div class="finding">
