@@ -21,9 +21,13 @@ BB = pd.read_parquet("out/breakout_board.parquet")
 SOS = pd.read_parquet("out/sos_2026.parquet")
 LIFTJ = json.load(open("out/research_lift.json"))
 RUNJ = json.load(open("out/research_runway.json"))
-LIFTP = pd.read_parquet("out/lift.parquet")
-LIFTP = LIFTP[LIFTP.season == 2026][["player_id", "LIFT", "lift_raw", "role_opp", "opp_prev"]]
-board = board.merge(LIFTP, on="player_id", how="left")
+LOADJ = json.load(open("out/research_load.json"))
+CORR = json.load(open("out/research_corr.json"))
+STAND = json.load(open("out/research_standouts.json"))
+LOADP = pd.read_parquet("out/load.parquet")
+LOADP = LOADP[LOADP.season == 2026][["player_id", "LOAD", "load_raw", "lift_raw",
+                                     "role_opp", "opp_prev", "depth"]]
+board = board.merge(LOADP, on="player_id", how="left")
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -111,8 +115,9 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
-        lift=clean(r.get("LIFT"), 0), liftRaw=clean(r.get("lift_raw"), 1),
+        load=clean(r.get("LOAD"), 0), liftRaw=clean(r.get("lift_raw"), 1),
         role=clean(r.get("role_opp"), 1), oppPrev=clean(r.get("opp_prev"), 1),
+        depth=(None if pd.isna(r.get("depth")) else int(r.get("depth"))),
         waa=clean(r.get("waa25"), 2), flr=clean(r.get("flr25"), 3),
         spk=clean(r.get("spk25"), 3), ghst=clean(r.get("ghst25"), 3),
         flags=list(r.flags) if isinstance(r.flags, (list, np.ndarray)) else []))
@@ -206,25 +211,36 @@ def _l(v):
     return list(v) if isinstance(v, (list, np.ndarray)) else []
 
 
-RESEARCH["lift"] = dict(
-    rho=LIFTJ["rho"], spread=LIFTJ["spread"], se=LIFTJ["se"], n=LIFTJ["n"],
-    seasons=LIFTJ["seasons"], role_curve=LIFTJ["role_curve"],
-    quintiles=LIFTJ["quintiles"],
+RESEARCH["load"] = dict(
+    spread=LOADJ["spread"], se=LOADJ["se"], t=LOADJ["t"], n=LOADJ["n"],
+    seasons=LOADJ["seasons"], role_curve=LOADJ["role_curve"],
+    quintiles=LOADJ["quintiles"], card=LOADJ["card"], null_price=LOADJ["null_price"],
+    # the retraction: LIFT's own numbers, before and after the price control
+    lift_spread=LOADJ["lift_spread"], lift_se=LOADJ["lift_se"], lift_t=LOADJ["lift_t"],
+    lift_raw_spread=LIFTJ["spread"], lift_raw_se=LIFTJ["se"], lift_raw_rho=LIFTJ["rho"],
     runway_spread=RUNJ["spread"], runway_se=RUNJ["se"], runway_rho=RUNJ["rho"],
     runway_earned=RUNJ["parts"]["earned"],
     leaders=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
                   team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
-                  lift=clean(r.LIFT, 0), raw=clean(r.lift_raw, 1),
+                  load=clean(r.LOAD, 0), raw=clean(r.load_raw, 2),
                   role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
-             for _, r in board[(board.auction >= 2) & board.LIFT.notna()]
-                              .nlargest(16, "LIFT").iterrows()],
+             for _, r in board[(board.auction >= 2) & board.LOAD.notna()]
+                              .nlargest(16, "LOAD").iterrows()],
     maxed=[dict(id=str(r.player_id), name=str(r["name"]), pos=str(r.position),
                 team=(None if pd.isna(r.team) else str(r.team)), auc=int(r.auction),
-                lift=clean(r.LIFT, 0), role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
-           for _, r in board[(board.auction >= 15) & board.LIFT.notna()]
-                            .nsmallest(6, "LIFT").iterrows()])
-print("LIFT: rho", LIFTJ["rho"], "spread", LIFTJ["spread"],
-      "| leaders", len(RESEARCH["lift"]["leaders"]))
+                load=clean(r.LOAD, 0), role=clean(r.role_opp, 1), prev=clean(r.opp_prev, 1))
+           for _, r in board[(board.auction >= 15) & board.LOAD.notna()]
+                            .nsmallest(6, "LOAD").iterrows()])
+print("LOAD: spread", LOADJ["spread"], "+/-", LOADJ["se"], "t", LOADJ["t"],
+      "| leaders", len(RESEARCH["load"]["leaders"]))
+
+RESEARCH["corr"] = dict(
+    labels=CORR["labels"], matrix=CORR["matrix"], dupes=CORR["dupes"],
+    n_rows=CORR.get("n_rows"),
+    independence=CORR["independence"])
+RESEARCH["standouts"] = STAND
+print("matrix:", len(CORR["labels"]), "metrics |", len(CORR["dupes"]), "duplicate pairs |",
+      len(STAND["scatter"]), "scatter points")
 
 RESEARCH["breakout"] = dict(
     rho=BRK["rho"], spread=BRK["spread"], se=BRK["se"], n=BRK["n"],

@@ -34,6 +34,11 @@ budget, your maximum legal bid, the live inflation rate, and what your room has 
 been paying for each position against list — then tells you what a player is worth *right
 now*, the most you should pay, and which position your money is stretching furthest in.
 
+**The Matrix** — all 40 metrics correlated against each other and clustered into a heatmap,
+so the duplicates fall into blocks; which stats are already inside the price and which know
+something it does not; and a chart of price against the size of a player's job, with the
+two corners that survived a proper control marked on it.
+
 ## How the numbers were built
 
 Everything is derived from [nflverse](https://github.com/nflverse/nflverse-data) play-by-play
@@ -102,7 +107,7 @@ missed week as a zero, because that is what your lineup scored.
 | **Floor** | Share of weeks he outscored a typical starter at his position — how often he actually won you the slot. |
 | **Spike** | Share of weeks in the top decile of outcomes at his position. |
 | **Blank** | Share of weeks he gave you nothing at all. |
-| **LIFT** | Touches a week his 2026 role pays, minus what he actually got — see below. |
+| **LOAD** | Touches a week his 2026 role pays, **plus** what he actually got — see below. Replaces LIFT, which had the sign backwards. |
 
 WAA forecasts realised wins **better than projected points do** — 0.719 versus 0.670 rank
 correlation, winning all ten test seasons. And pricing an auction off it still **lost 7.2
@@ -160,14 +165,14 @@ Auction Room tracks what your actual room has paid for each position against lis
 points you at whatever it is neglecting. That is the only version of "buy low" that cannot
 be arbitraged away by the other managers, because it is defined by them.
 
-### LIFT — a stat built for finding breakouts
+### LOAD — a stat built for finding breakouts
 
-    LIFT = touches a week his 2026 job normally pays
-         − touches a week he actually got in 2025
+    LOAD = touches a week his 2026 job normally pays
+         + touches a week he actually got in 2025
 
-Scored against others at his own position and placed on a 0–100 scale, because a
-quarterback drops back thirty-five times and a third receiver sees five. What each rung of
-the depth chart pays is measured, not assumed:
+Each half is standardised inside position and the two are added, because a quarterback
+drops back thirty-five times and a third receiver sees five. What each rung of the depth
+chart pays is measured, not assumed:
 
 | | 1st | 2nd | 3rd |
 |---|---|---|---|
@@ -176,19 +181,44 @@ the depth chart pays is measured, not assumed:
 | WR | 6.5 | 5.6 | 4.1 |
 | TE | 4.5 | 1.9 | 1.3 |
 
-A rookie starter has enormous LIFT. So does a backup promoted after the man ahead of him
-left. A player already carrying a full load has none — which is the point, because the
-board has already paid for the workload he had.
+One number for the size of a player's job, counting both the part he has already proven and
+the part the depth chart just handed him. The board sees neither cleanly: it projects
+fantasy *points*, and two players with identical projections can arrive there on volume or
+on touchdowns. The volume one repeats.
 
-**Between the top and bottom fifth: +29 points** of season-long residual, ±5.0, 5.8 standard
-errors, positive in every season tested. Rank correlation with the miss is **0.182**, which
-edges out the entire eight-signal model below while being one line of arithmetic. The
-depth-chart pay curve is refit with each test season removed, so it never scores a year it
-has already seen.
+**Between the top and bottom third, at the same price: +35.9 points** of season-long
+residual, ±7.8, **t = 4.6**, over 560 player-seasons in 2022–2025. The pay curve is refit
+with each test season removed, so it never scores a year it has already seen.
 
-**Low LIFT is not a sell signal.** Trey McBride, Ja'Marr Chase and Puka Nacua sit at the
-bottom of it. They are among the best players in the league; there is simply no surprise
-left in their role. LIFT predicts *beating the projection*, not *being good*.
+"At the same price" is doing real work in that sentence — see the retraction below.
+
+#### Retracted: LIFT had the wrong sign
+
+This repo previously shipped **LIFT** = role *minus* last year's usage — the "room to grow"
+— at **+29 points**, 5.8 standard errors. That number was reproducible and it was not the
+stat. High-LIFT players are cheap players (LIFT correlates **−0.43** with what the board
+charges), and cheap players beat their projections for a reason that has nothing to do with
+role: projections overshoot at the top and undershoot at the bottom. Ranking on **price
+alone** collects +17 points of the same effect.
+
+Comparing only players who cost about the same, LIFT collapses:
+
+| held at a fixed price | spread | t |
+|---|---|---|
+| LOAD (role **+** usage) | **+35.9** | **4.6** |
+| role alone | +23.6 | 2.8 |
+| last year's usage alone | +3.0 | 0.4 |
+| LIFT (role **−** usage) | +8.2 | 1.0 |
+| price alone — the null | −3.4 | −0.4 |
+
+The cause is arithmetic, not calibration. *Both* halves predict the miss positively, so
+subtracting one from the other cancels the signal. A regression allowed to choose its own
+weights wants **(+13.5, +9.1)**; LIFT forced **(+1, −1)**. LOAD adds them instead.
+
+Three independent checks agree — the sum beats the difference, the fitted weights are both
+positive, and the partial correlation after projecting out price is +0.196 (t 4.9) for the
+sum against +0.038 (t 0.9) for LIFT. The 8-signal Leap model never used LIFT, so its +29
+result is unaffected.
 
 #### The version that failed first
 
@@ -196,7 +226,40 @@ The first attempt, RUNWAY, multiplied a player's efficiency over his own teammat
 opportunity going spare. It returned **+1.1 points**, well inside the noise. The post-mortem
 is the useful half: efficiency over one's own teammates graded out **negative** (−0.050).
 Coaches do not hand work to the efficient backup, and a high rate on few touches is mostly
-small sample. The stat that works measures the *job*, not the running.
+small sample. Both failures point the same way: measure the *job*, not the running.
+
+### The correlation matrix, and the trap it caught
+
+Every stat here was tested on its own. That is not the same as testing whether it adds
+anything the others do not already say. `corrmatrix.py` correlates all 40 metrics against
+each other over 12,073 player-seasons and clusters them, then asks two questions.
+
+**Which stats are the same stat.** 39 pairs correlate at |rho| ≥ 0.85 — target share and
+WOPR at 0.990, points/gm and expected points/gm at 0.985, season points and board VORP at
+0.947. Anything inside a block can be dropped without losing information, which is why the
+rankings table carries five columns and not forty.
+
+**What is independent of price.** A stat correlated with what a player costs is already in
+the price; you are paying for it. This screen is what promoted LIFT, and it is also what
+nearly buried its replacement:
+
+| | in the price | knows the board's miss |
+|---|---|---|
+| Depth chart climb | +0.187 | **+0.153** |
+| LIFT (retracted) | −0.427 | +0.171 |
+| Role (touches) | +0.485 | +0.121 |
+| Season points | +0.904 | −0.083 |
+| Floor rate | +0.867 | −0.077 |
+| **LOAD** | **+0.852** | **+0.079** |
+
+Read the bottom rows together: everything the board prices heavily predicts its own miss
+*negatively*. That is regression to the mean — expensive players disappoint, as a class.
+LOAD is the single exception, and that is the whole reason it survives a control that LIFT
+does not.
+
+The lesson generalises. "Uncorrelated with price" and "adds something at a given price" are
+different claims, and only the second one is worth money. Screening on the first promotes
+stats whose entire edge is that they point at cheap players.
 
 ### The Leap: situational signals
 
@@ -273,8 +336,18 @@ python tilt_confirm.py WR 1.3   # two-arm, season by season
 python weight_sweep.py          # retune need + scarcity weights
 python auction_sim.py           # auction strategy tournament
 python project2026.py           # build the board
+python wins.py                  # WAA / Floor / Spike / Blank
+python breakout.py              # The Leap panel + 8-signal model
+python load.py                  # LOAD, and the price-held-fixed control
+python corrmatrix.py            # the 40-metric correlation matrix
+python standouts.py             # the corners of the price-vs-LOAD chart
 python build_app.py             # emit the app
 ```
+
+Two scripts are kept only because they document failures: `runway.py` (the breakout stat
+that returned nothing) and `lift.py` (the retracted stat). `standouts_null.py` and
+`lift_decomp.py` are the controls that caught the retraction and are worth reading before
+trusting any "cheap X" screen.
 
 `build_app.py` writes `out/standalone.html`, which is what ships as `index.html`.
 

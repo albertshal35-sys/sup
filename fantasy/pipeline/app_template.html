@@ -170,6 +170,9 @@ thead th {
   border-bottom: 1px solid var(--line); cursor: pointer; user-select: none;
 }
 thead th:first-child, thead th.l { text-align: left; }
+/* short reference tables are read in place, not scrolled past — a header pinned to
+   the viewport detaches from its own rows */
+table.plain thead th { position: static; cursor: default; }
 thead th[aria-sort]:not([aria-sort="none"]) { color: var(--accent); }
 tbody td { padding: .42rem .55rem; text-align: right; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 tbody td.l { text-align: left; }
@@ -259,6 +262,7 @@ details.method .pad { font-size: .84rem; color: var(--ink-2); }
       <button role="tab" id="tab-board" aria-selected="true" aria-controls="panel-board">Rankings</button>
       <button role="tab" id="tab-draft" aria-selected="false" aria-controls="panel-draft">Auction Room</button>
       <button role="tab" id="tab-leap" aria-selected="false" aria-controls="panel-leap">The Leap</button>
+      <button role="tab" id="tab-matrix" aria-selected="false" aria-controls="panel-matrix">The Matrix</button>
     </div>
     <button class="ghost" id="themeBtn" title="Toggle light / dark">Theme</button>
   </div>
@@ -268,6 +272,7 @@ details.method .pad { font-size: .84rem; color: var(--ink-2); }
   <section id="panel-board" role="tabpanel" aria-labelledby="tab-board"></section>
   <section id="panel-draft" role="tabpanel" aria-labelledby="tab-draft" hidden></section>
   <section id="panel-leap" role="tabpanel" aria-labelledby="tab-leap" hidden></section>
+  <section id="panel-matrix" role="tabpanel" aria-labelledby="tab-matrix" hidden></section>
 </div>
 
 <script>
@@ -524,7 +529,7 @@ const COLS = [
   { k: "pts", t: "Proj Pts", cls: "num", w: p => p.pts },
   { k: "vorp", t: "VORP", cls: "num", w: p => p.vorp },
   { k: "tier", t: "Tier", cls: "num", w: p => p.tier },
-  { k: "lift", t: "LIFT", cls: "num", w: p => p.lift },
+  { k: "load", t: "LOAD", cls: "num", w: p => p.load },
   { k: "flr", t: "Floor 25", cls: "num", w: p => p.flr },
   { k: "spk", t: "Spike 25", cls: "num", w: p => p.spk },
   { k: "ghst", t: "Blank 25", cls: "num", w: p => p.ghst },
@@ -643,9 +648,9 @@ function renderBoard() {
                 <td class="num">${fmt(p.pts)}</td>
                 <td class="num">${fmt(p.vorp)}</td>
                 <td class="num">${p.tier}</td>
-                <td class="num" style="font-weight:${p.lift != null && p.lift >= 65 ? 700 : 400};${
-                  p.lift == null ? "" : p.lift >= 65 ? "color:var(--accent)" : p.lift <= 30 ? "color:var(--muted)" : ""}"
-                  title="${p.lift == null ? "" : `role worth ${fmt(p.role, 1)} touches a game, had ${fmt(p.oppPrev, 1)}`}">${p.lift == null ? "—" : fmt(p.lift)}</td>
+                <td class="num" style="font-weight:${p.load != null && p.load >= 75 ? 700 : 400};${
+                  p.load == null ? "" : p.load >= 75 ? "color:var(--accent)" : p.load <= 45 ? "color:var(--muted)" : ""}"
+                  title="${p.load == null ? "" : `role worth ${fmt(p.role, 1)} touches a game, plus ${fmt(p.oppPrev, 1)} he actually got`}">${p.load == null ? "—" : fmt(p.load)}</td>
                 <td class="num">${p.flr == null ? "—" : fmt(p.flr * 100) + "%"}</td>
                 <td class="num">${p.spk == null ? "—" : fmt(p.spk * 100) + "%"}</td>
                 <td class="num" style="${p.ghst != null && p.ghst > 0.2 ? "color:var(--danger)" : ""}">${p.ghst == null ? "—" : fmt(p.ghst * 100) + "%"}</td>
@@ -1196,78 +1201,92 @@ function renderLeap() {
 
     <div class="card pad">
       <div class="section-head">
-        <h2>LIFT</h2>
-        <span class="hint">a stat built for this, and tested before it was believed</span>
+        <h2>LOAD</h2>
+        <span class="hint">the stat that survived the control — and the one it replaced</span>
       </div>
       <div class="findings">
         <div class="finding">
           <p class="eyebrow">The formula</p>
           <p style="font-family:ui-monospace,Menlo,monospace;font-size:.86rem;background:var(--surface-2);
                     padding:.7rem .8rem;border-radius:8px;line-height:1.6">
-            LIFT = touches a week his 2026 <em>job</em> normally pays<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&minus; touches a week he actually <em>got</em> in 2025
+            LOAD = touches a week his 2026 <em>job</em> normally pays<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<strong>+</strong> touches a week he actually <em>got</em> in 2025
           </p>
-          <p>Scored against others at his own position and put on a 0–100 scale, because a quarterback drops back
-          thirty-five times and a third receiver sees five. A rookie starter has enormous LIFT. So does a backup
-          promoted after the man ahead of him left. A player already carrying a full load has none.</p>
+          <p>One number for the size of a player's job, counting both the part he has already proven and the part
+          the depth chart just handed him. Each half is scored against others at his own position and the two are
+          added, because a quarterback drops back thirty-five times and a third receiver sees five.</p>
           <p>What each rung of the ladder actually pays, measured rather than assumed:</p>
           <dl class="kv">
             ${["QB", "RB", "WR", "TE"].map(pp => `<dt>${pp}1 / ${pp}2 / ${pp}3</dt><dd class="num">${
-              [1, 2, 3].map(i => R.lift.role_curve[pp] && R.lift.role_curve[pp][i] != null
-                ? fmt(R.lift.role_curve[pp][i], 1) : "—").join(" / ")} touches</dd>`).join("")}
+              [1, 2, 3].map(i => R.load.role_curve[pp] && R.load.role_curve[pp][i] != null
+                ? fmt(R.load.role_curve[pp][i], 1) : "—").join(" / ")} touches</dd>`).join("")}
           </dl>
         </div>
 
         <div class="finding">
-          <p class="eyebrow">What it is worth</p>
-          <div class="bignum good">+${fmt(R.lift.spread)} pts</div>
-          <p>Between the top fifth and bottom fifth by LIFT, in season-long points above what the projection
-          said — ${fmt(R.lift.spread / R.lift.se, 1)} standard errors, positive in every season tested. Rank
-          correlation with the miss is ${fmt(R.lift.rho, 3)}, which edges out the whole eight-signal model on the
-          right of this page while being one line of arithmetic.</p>
+          <p class="eyebrow">What it is worth, at the same price</p>
+          <div class="bignum good">+${fmt(R.load.spread)} pts</div>
+          <p>Top third against bottom third <em>inside each price band</em> — so every comparison is between
+          players who cost about the same. ${fmt(R.load.t, 1)} standard errors. The control that matters sits
+          right beside it: ranking on price alone inside a band is worth
+          ${R.load.null_price >= 0 ? "+" : ""}${fmt(R.load.null_price, 1)} points, i.e. nothing, which is how you
+          know the spread is the stat and not the discount.</p>
           <dl class="kv">
-            ${Object.entries(R.lift.quintiles).map(([k, v]) =>
-              `<dt>${k} fifth</dt><dd class="num">${v.resid >= 0 ? "+" : ""}${fmt(v.resid, 1)} pts</dd>`).join("")}
+            ${R.load.card.map(c =>
+              `<dt>${c.stat.replace(/\s+\(.*\)/, "")}</dt><dd class="num">${c.spread >= 0 ? "+" : ""}${fmt(c.spread, 1)} <span class="psub">t ${fmt(c.t, 1)}</span></dd>`).join("")}
           </dl>
-          <p class="hint" style="margin-top:.4rem">±${fmt(R.lift.se, 1)} points, ${R.lift.n} player-seasons,
-            ${R.lift.seasons[0]}–${R.lift.seasons[R.lift.seasons.length - 1]}. The depth-chart pay curve is refit
+          <p class="hint" style="margin-top:.4rem">±${fmt(R.load.se, 1)} points, ${R.load.n} player-seasons,
+            ${R.load.seasons[0]}–${R.load.seasons[R.load.seasons.length - 1]}. The depth-chart pay curve is refit
             with each test season removed, so it never scores a year it has seen.</p>
         </div>
 
-        <div class="finding">
-          <p class="eyebrow">The version that failed first</p>
-          <div class="bignum">${R.lift.runway_spread >= 0 ? "+" : ""}${fmt(R.lift.runway_spread, 1)} pts</div>
-          <p>The first attempt multiplied a player's efficiency over his own teammates by the opportunity going
-          spare. It returned nothing — ${fmt(R.lift.runway_spread, 1)} points, well inside the noise. The
-          post-mortem is the useful half: efficiency over one's own teammates graded out <strong>negative</strong>
-          (${fmt(R.lift.runway_earned, 3)}). Coaches do not hand work to the efficient backup, and a high rate on
-          few touches is mostly small sample. So the stat that works measures the <em>job</em>, not the running.</p>
+        <div class="finding" style="border-top-color:var(--danger)">
+          <p class="eyebrow" style="color:var(--danger)">Retracted — LIFT had the wrong sign</p>
+          <div class="bignum bad">+${fmt(R.load.lift_spread, 1)} pts</div>
+          <p>This page previously shipped <strong>LIFT</strong> = role <em>minus</em> last year's usage, the
+          "room to grow", at +${fmt(R.load.lift_raw_spread)} points. That number was real and it was not the
+          stat. High-LIFT players are cheap players, and cheap players beat their projections for a reason that
+          has nothing to do with role — the projection overshoots at the top and undershoots at the bottom.</p>
+          <p>Hold price fixed and LIFT collapses to +${fmt(R.load.lift_spread, 1)} points
+          (t ${fmt(R.load.lift_t, 1)}). The cause is arithmetic: <em>both</em> halves predict the miss
+          positively, so subtracting one from the other cancels the signal. A regression allowed to pick its own
+          weights wants (+13.5, +9.1); LIFT forced (+1, &minus;1). LOAD adds them instead.</p>
         </div>
       </div>
 
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:1.2rem">
         <div>
-          <p class="eyebrow" style="margin-bottom:.5rem">Most room to grow, 2026</p>
-          ${R.lift.leaders.map(p => `<div class="slot">
+          <p class="eyebrow" style="margin-bottom:.5rem">Biggest jobs on the board, 2026</p>
+          ${R.load.leaders.map(p => `<div class="slot">
             <span class="lab">${p.pos}</span>
             <span style="flex:1">${p.name} <span class="psub">${p.team || ""} · $${p.auc}</span></span>
-            <span class="mono" style="font-weight:700;color:var(--accent)">${fmt(p.lift)}</span>
-            <span class="psub mono" style="min-width:8.5em;text-align:right">${fmt(p.role, 1)} vs ${fmt(p.prev, 1)}/gm</span>
+            <span class="mono" style="font-weight:700;color:var(--accent)">${fmt(p.load)}</span>
+            <span class="psub mono" style="min-width:9em;text-align:right">${fmt(p.role, 1)} + ${fmt(p.prev, 1)}/gm</span>
           </div>`).join("")}
         </div>
         <div>
-          <p class="eyebrow" style="margin-bottom:.5rem">Already maxed out — and that is fine</p>
-          <p class="hint" style="margin-bottom:.5rem">Low LIFT is not a sell signal. These are among the best
-            players in the league; the board has simply already paid for the workload, so there is no surprise
-            left in the role. Buy them at the right price, just do not expect a leap.</p>
-          ${R.lift.maxed.map(p => `<div class="slot">
+          <p class="eyebrow" style="margin-bottom:.5rem">Expensive, and the workload is not there</p>
+          <p class="hint" style="margin-bottom:.5rem">Not a sell signal on its own — these are good players. It
+            says the price is carried by scoring rather than by volume, and volume is the half that repeats.
+            Buy them if the room lets them slide; do not lead the bidding.</p>
+          ${R.load.maxed.map(p => `<div class="slot">
             <span class="lab">${p.pos}</span>
             <span style="flex:1">${p.name} <span class="psub">${p.team || ""} · $${p.auc}</span></span>
-            <span class="mono psub">${fmt(p.lift)}</span>
-            <span class="psub mono" style="min-width:8.5em;text-align:right">${fmt(p.role, 1)} vs ${fmt(p.prev, 1)}/gm</span>
+            <span class="mono psub">${fmt(p.load)}</span>
+            <span class="psub mono" style="min-width:9em;text-align:right">${fmt(p.role, 1)} + ${fmt(p.prev, 1)}/gm</span>
           </div>`).join("")}
         </div>
       </div>
+
+      <details class="method">
+        <summary>The first attempt, which failed outright</summary>
+        <div class="pad">RUNWAY multiplied a player's efficiency over his own teammates by the opportunity going
+        spare. It returned ${fmt(R.load.runway_spread, 1)} points — inside the noise. The post-mortem is the
+        useful half: efficiency over one's own teammates graded out <strong>negative</strong>
+        (${fmt(R.load.runway_earned, 3)}). Coaches do not hand work to the efficient backup, and a high rate on
+        few touches is mostly small sample. Both failures point the same way: measure the <em>job</em>, not the
+        running.</div>
+      </details>
     </div>
 
     <div class="card pad">
@@ -1393,22 +1412,307 @@ function renderLeap() {
   </div>`;
 }
 /* ==================================================================
+   RENDER — THE MATRIX
+   ================================================================== */
+const HM = { cell: 21, gutL: 186, gutT: 150 };
+
+function hmColor(r) {
+  const a = Math.min(1, Math.abs(r)) * 100;
+  return `color-mix(in srgb, var(--${r >= 0 ? "accent" : "danger"}) ${a.toFixed(1)}%, var(--surface))`;
+}
+
+function renderHeatmap() {
+  const L = RESEARCH.corr.labels, M = RESEARCH.corr.matrix, n = L.length;
+  const { cell, gutL, gutT } = HM;
+  const W = gutL + n * cell + 8, H = gutT + n * cell + 8;
+  const cells = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const r = M[i][j];
+      cells.push(`<rect data-i="${i}" data-j="${j}" x="${gutL + j * cell}" y="${gutT + i * cell}"
+        width="${cell}" height="${cell}" fill="${i === j ? "var(--ink-2)" : hmColor(r)}"/>`);
+    }
+  }
+  return `
+  <figure style="margin:0">
+    <div class="tablewrap" style="border:1px solid var(--line-soft);background:var(--surface)">
+      <svg id="hmSvg" viewBox="0 0 ${W} ${H}" width="${W}" style="display:block;max-width:none"
+           role="img" aria-label="Correlation matrix of ${n} fantasy football metrics, hierarchically clustered">
+        ${cells.join("")}
+        ${L.map((l, i) => `<text x="${gutL - 8}" y="${gutT + i * cell + cell / 2 + 4}" font-size="11.5"
+          text-anchor="end" fill="var(--ink-2)">${l}</text>`).join("")}
+        ${L.map((l, j) => `<text transform="translate(${gutL + j * cell + cell / 2 + 4},${gutT - 8}) rotate(-52)"
+          font-size="11.5" text-anchor="start" fill="var(--ink-2)">${l}</text>`).join("")}
+        <rect x="${gutL}" y="${gutT}" width="${n * cell}" height="${n * cell}"
+              fill="none" stroke="var(--line)" stroke-width="1"/>
+      </svg>
+    </div>
+    <div id="hmRead" class="mono" style="margin-top:.5rem;font-size:.8rem;color:var(--ink-2);min-height:1.3em">
+      Hover any square to read the pair.
+    </div>
+    <figcaption>Spearman rank correlation between every pair of ${n} metrics, over
+      ${RESEARCH.corr.n_rows || "12,000+"} player-seasons. Rows and columns are ordered by hierarchical
+      clustering on 1&nbsp;&minus;&nbsp;|rho|, so metrics that say the same thing sit in blocks along the
+      diagonal. Teal is positive, rust negative, intensity is strength.</figcaption>
+  </figure>`;
+}
+
+/* Greedy label placement: names sit to the right of their dot, and slide down until
+   they clear the last label placed nearby. A hairline keeps each name attached to
+   the point it belongs to once it has moved. */
+function placeLabels(items, x, y) {
+  const out = [], GAP = 12.5, REACH = 78;
+  items.map(p => ({ p, px: x(p.x), py: y(p.y) }))
+       .sort((a, b) => a.py - b.py || a.px - b.px)
+       .forEach(({ p, px, py }) => {
+         const right = p.x < 26;
+         let ty = py + 3.5;
+         for (const o of out) {
+           if (Math.abs(o.lx - (right ? px + 9 : px - 9)) < REACH && Math.abs(o.ty - ty) < GAP) {
+             ty = o.ty + GAP;
+           }
+         }
+         out.push({ text: p.n.split(" ").slice(-1)[0], px, py,
+                    lx: right ? px + 9 : px - 9,
+                    tx: right ? px + 11 : px - 11,
+                    anchor: right ? "start" : "end", ty });
+       });
+  return out;
+}
+
+function renderScatter() {
+  const S2 = RESEARCH.standouts, pts = S2.scatter;
+  const W = 1080, H = 470, PL = 52, PR = 86, PT = 20, PB = 44;
+  const xmax = Math.max(...pts.map(p => p.x)) * 1.04;
+  const ys = pts.map(p => p.y);
+  const ylo = Math.max(0, Math.floor((Math.min(...ys) - 4) / 5) * 5);
+  const yhi = Math.min(100, Math.ceil((Math.max(...ys) + 4) / 5) * 5);
+  const x = v => PL + (v / xmax) * (W - PL - PR);
+  const y = v => PT + (1 - (v - ylo) / (yhi - ylo)) * (H - PT - PB);
+  const mx = x(S2.median_price), my = y(S2.median_load);
+  const top = new Set(S2.corners["Cheap job"].players.map(p => p.id));
+  const bot = new Set(S2.corners["Paying for the past"].players.map(p => p.id));
+  const lab = p => (top.has(p.id) || bot.has(p.id));
+  return `
+  <figure style="margin:0">
+    <div class="tablewrap">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block" role="img"
+           aria-label="Auction price against LOAD for 133 priced players, with the two validated corners marked">
+        <rect x="${PL}" y="${PT}" width="${mx - PL}" height="${my - PT}" fill="var(--accent)" opacity=".07"/>
+        <rect x="${mx}" y="${my}" width="${W - PR - mx}" height="${H - PB - my}" fill="var(--danger)" opacity=".07"/>
+        ${[20, 30, 40, 50, 60, 70, 80, 90, 100].filter(v => v >= ylo && v <= yhi).map(v => `<line x1="${PL}" x2="${W - PR}" y1="${y(v)}" y2="${y(v)}"
+          stroke="var(--line-soft)" stroke-width="1"/>
+          <text x="${PL - 7}" y="${y(v) + 3.5}" font-size="10" fill="var(--muted)" text-anchor="end">${v}</text>`).join("")}
+        ${[0, 5, 10, 15, 20, 25, 30, 35, 40].filter(v => v <= xmax).map(v => `<text x="${x(v)}" y="${H - 22}" font-size="10"
+          fill="var(--muted)" text-anchor="middle">$${v}</text>`).join("")}
+        <line x1="${mx}" x2="${mx}" y1="${PT}" y2="${H - PB}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="${PL}" x2="${W - PR}" y1="${my}" y2="${my}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>
+        <text x="${PL + 6}" y="${PT + 13}" font-size="10" font-weight="700" fill="var(--accent)">CHEAP JOB</text>
+        <text x="${W - PR - 6}" y="${H - PB - 6}" font-size="10" font-weight="700" fill="var(--danger)"
+              text-anchor="end">PAYING FOR THE PAST</text>
+        ${pts.map(p => `<circle cx="${x(p.x).toFixed(1)}" cy="${y(p.y).toFixed(1)}"
+          r="${lab(p) ? 6 : 4}" fill="var(--${p.p.toLowerCase()})"
+          opacity="${lab(p) ? .95 : .42}"
+          ${lab(p) ? 'stroke="var(--surface)" stroke-width="1.4"' : ""}><title>${p.n} · ${p.p} · $${p.x} · LOAD ${p.y}</title></circle>`).join("")}
+        ${placeLabels(pts.filter(lab), x, y).map(l => `<text x="${l.tx.toFixed(1)}" y="${l.ty.toFixed(1)}"
+          font-size="10.5" text-anchor="${l.anchor}" fill="var(--ink-2)"
+          >${l.text}</text><line x1="${l.px.toFixed(1)}" y1="${l.py.toFixed(1)}" x2="${l.lx.toFixed(1)}"
+          y2="${(l.ty - 3.5).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`).join("")}
+        <text x="${(PL + W - PR) / 2}" y="${H - 6}" font-size="10.5" fill="var(--muted)"
+              text-anchor="middle">auction price</text>
+        <text transform="translate(13,${(PT + H - PB) / 2}) rotate(-90)" font-size="10.5"
+              fill="var(--muted)" text-anchor="middle">LOAD</text>
+        ${["QB", "RB", "WR", "TE"].map((p, i) => `<g transform="translate(${W - PR + 12},${PT + 10 + i * 17})">
+          <circle r="4" cx="4" cy="-3" fill="var(--${p.toLowerCase()})"/>
+          <text x="14" y="1" font-size="11" fill="var(--ink-2)">${p}</text></g>`).join("")}
+      </svg>
+    </div>
+    <figcaption>Every player the board prices at $2 or more, plotted by what he costs against how big his job is.
+      Dashed lines are the medians. The shaded corners are the two ends of the one gap that survived the
+      price control; named players are the ten most extreme in each.</figcaption>
+  </figure>`;
+}
+
+function renderMatrix() {
+  const el = $("#panel-matrix"), R = RESEARCH, C = R.corr, S2 = R.standouts;
+  const dupes = C.dupes.slice().sort((a, b) => Math.abs(b[2]) - Math.abs(a[2])).slice(0, 12);
+  const ind = C.independence;
+  const newInfo = ind.filter(r => Math.abs(r.vs_price) < 0.25 && Math.abs(r.vs_miss) >= 0.08);
+  const priced = ind.slice(-6).reverse();
+  const pick = s => ind.find(r => r.stat === s) || { vs_price: NaN, vs_miss: NaN };
+  const IL = pick("LIFT (retracted)"), IO = pick("LOAD");
+  const bar = (v, max, col) => {
+    const w = Math.min(1, Math.abs(v) / max) * 46;
+    return `<span style="display:inline-block;vertical-align:middle;width:46px;text-align:${v < 0 ? "right" : "left"}">
+      <span style="display:inline-block;height:7px;border-radius:2px;width:${w.toFixed(1)}px;background:var(--${col})"></span></span>`;
+  };
+
+  el.innerHTML = `
+  <div class="grid" style="margin-top:1rem">
+    <div class="card pad">
+      <div class="section-head">
+        <h1>Everything against everything</h1>
+      </div>
+      <p style="max-width:66ch">Every stat in this project was tested on its own. That is not the same as
+      testing whether it adds anything the others do not already say. This is all
+      ${C.labels.length} of them correlated against each other and against the two things that matter —
+      what the board <em>charges</em>, and what the board <em>gets wrong</em>. It answers two questions, and
+      the second one overturned a stat this app used to ship.</p>
+    </div>
+
+    <div class="card pad">
+      <div class="section-head">
+        <h2>The matrix</h2>
+        <span class="hint">clustered, so duplicates fall into blocks along the diagonal</span>
+      </div>
+      ${renderHeatmap()}
+    </div>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(330px,1fr))">
+      <div class="card pad">
+        <div class="section-head"><h2>Question 1 — which stats are the same stat</h2></div>
+        <p class="hint" style="margin-bottom:.6rem">${C.dupes.length} pairs correlate at |rho| ≥ 0.85. Anything
+          inside a block is a stat wearing a hat: it can be dropped without losing information. This is why the
+          rankings table shows five columns and not forty.</p>
+        <div class="tablewrap"><table class="plain">
+          <thead><tr><th class="l">stat</th><th class="l">is basically</th><th>rho</th></tr></thead>
+          <tbody>${dupes.map(([a, b, r]) => `<tr>
+            <td>${a}</td><td>${b}</td>
+            <td class="num" style="color:var(--${r >= 0 ? "accent" : "danger"});font-weight:650">${r >= 0 ? "+" : ""}${fmt(r, 3)}</td>
+          </tr>`).join("")}</tbody>
+        </table></div>
+      </div>
+
+      <div class="card pad">
+        <div class="section-head"><h2>Question 2 — what is independent of price</h2></div>
+        <p class="hint" style="margin-bottom:.6rem">A stat correlated with what a player costs is already in the
+          price; you are paying for it. The left bar is how much of the stat the price already contains. The
+          right bar is what it knows about the board's <em>miss</em> — the only column that can win you money.</p>
+        <div class="tablewrap"><table class="plain">
+          <thead><tr><th class="l">stat</th><th>in the price</th><th>knows the miss</th></tr></thead>
+          <tbody>
+            ${newInfo.map(r => `<tr>
+              <td><strong>${r.stat}</strong> <span class="flag good">new information</span></td>
+              <td class="num">${bar(r.vs_price, 1, "muted")} ${r.vs_price >= 0 ? "+" : ""}${fmt(r.vs_price, 3)}</td>
+              <td class="num" style="color:var(--accent);font-weight:650">${bar(r.vs_miss, .25, "accent")} ${r.vs_miss >= 0 ? "+" : ""}${fmt(r.vs_miss, 3)}</td>
+            </tr>`).join("")}
+            ${priced.map(r => `<tr>
+              <td style="color:var(--muted)">${r.stat}</td>
+              <td class="num" style="color:var(--muted)">${bar(r.vs_price, 1, "muted")} ${r.vs_price >= 0 ? "+" : ""}${fmt(r.vs_price, 3)}</td>
+              <td class="num" style="color:var(--${r.vs_miss >= 0 ? "accent" : "danger"})">${bar(r.vs_miss, .25, r.vs_miss >= 0 ? "accent" : "danger")} ${r.vs_miss >= 0 ? "+" : ""}${fmt(r.vs_miss, 3)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+        <p class="hint" style="margin-top:.6rem">Read the bottom six together: everything the board prices heavily
+          predicts its own miss <em>negatively</em>. That is regression to the mean — expensive players
+          disappoint, as a class. <strong>LOAD is the single exception</strong>, and that is the whole reason it
+          survives.</p>
+      </div>
+    </div>
+
+    <div class="card pad">
+      <div class="section-head">
+        <h2>The trap this matrix caught</h2>
+        <span class="hint">why "independent of price" is the wrong screen on its own</span>
+      </div>
+      <div class="findings">
+        <div class="finding" style="border-top-color:var(--danger)">
+          <p class="eyebrow" style="color:var(--danger)">What the screen said</p>
+          <p>LIFT looked ideal: <span class="mono">${fmt(IL.vs_price, 3)}</span> against board value, meaning
+          almost none of it was in the price, and <span class="mono">+${fmt(IL.vs_miss, 3)}</span> against the
+          miss. On this table it was the best combination on the board, and it is why it shipped.</p>
+        </div>
+        <div class="finding">
+          <p class="eyebrow">What the control said</p>
+          <p>But "uncorrelated with price" and "adds something at a given price" are different claims. Rank on
+          <em>price alone</em> and you already collect +17 points, because projections overshoot at the top.
+          Compare players who cost the same and LIFT's edge falls to
+          +${fmt(R.load.lift_spread, 1)} points (t ${fmt(R.load.lift_t, 1)}).</p>
+        </div>
+        <div class="finding" style="border-top-color:var(--accent)">
+          <p class="eyebrow" style="color:var(--accent)">What replaced it</p>
+          <p>LOAD is <span class="mono">+${fmt(IO.vs_price, 3)}</span> correlated with price — the naive screen would have thrown
+          it straight out. Yet at a fixed price it is worth <strong>+${fmt(R.load.spread)} points</strong>
+          (t ${fmt(R.load.t, 1)}). The right question was never "is it in the price", it was "does it beat the
+          price".</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card pad">
+      <div class="section-head">
+        <h2>Who stands out</h2>
+        <span class="hint">${S2.scatter.length} priced players, price against the size of the job</span>
+      </div>
+      ${renderScatter()}
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:1.2rem">
+        ${Object.entries(S2.corners).map(([name, c], k) => `<div>
+          <p class="eyebrow" style="margin-bottom:.25rem;color:var(--${k ? "danger" : "accent"})">${name}</p>
+          <p class="hint" style="margin-bottom:.5rem">${c.blurb}</p>
+          ${c.players.map(p => `<div class="slot">
+            <span class="lab">${p.pos}</span>
+            <span style="flex:1">${p.name} <span class="psub">${p.team || ""} · $${p.auc}</span></span>
+            <span class="mono" style="font-weight:700;color:var(--${k ? "danger" : "accent"})">${fmt(p.load)}</span>
+            <span class="psub mono" style="min-width:9em;text-align:right">${fmt(p.role, 1)} + ${fmt(p.prev, 1)}/gm</span>
+          </div>`).join("")}
+        </div>`).join("")}
+      </div>
+      <p class="hint" style="margin-top:.8rem;max-width:72ch">Neither list is an instruction. The left column is
+        where the validated edge lives, so those are the players to be willing to go a dollar or two over on. The
+        right column is not a fade list — several are excellent players — it says the price is carried by scoring
+        rather than by volume, and volume is the half that repeats.</p>
+      <details class="method">
+        <summary>How the corners are drawn, and what they are worth</summary>
+        <div class="pad">Both axes are standardised inside position, so a tight end and a quarterback sit on the
+        same chart without one drowning the other. The corner statistic is a single gap,
+        <span class="mono">z(LOAD) &minus; z(price)</span>, and it is the only one of four candidates that
+        survived the price control: cheap-role, cheap-workload and cheap-upside all collapsed toward the null
+        once players of equal cost were compared. Scored on
+        ${R.load.n} player-seasons across ${R.load.seasons[0]}–${R.load.seasons[R.load.seasons.length - 1]},
+        the top third of this gap beat the bottom third by +${fmt(R.load.spread)} points
+        (±${fmt(R.load.se, 1)}) inside price bands, against a null of
+        ${R.load.null_price >= 0 ? "+" : ""}${fmt(R.load.null_price, 1)} for price on its own. Four seasons is
+        the whole depth-chart record, so this is the least-tested number in the app — treat it as a tiebreaker,
+        not a mandate.</div>
+      </details>
+    </div>
+  </div>`;
+
+  const svg = $("#hmSvg"), read = $("#hmRead");
+  if (svg) {
+    const L = C.labels, M = C.matrix;
+    svg.addEventListener("mousemove", e => {
+      const t = e.target;
+      if (!t.dataset || t.dataset.i === undefined) return;
+      const i = +t.dataset.i, j = +t.dataset.j, r = M[i][j];
+      read.textContent = i === j ? `${L[i]} — itself` :
+        `${L[i]}  ×  ${L[j]}   rho ${r >= 0 ? "+" : ""}${r.toFixed(3)}`;
+    });
+    svg.addEventListener("mouseleave", () => { read.textContent = "Hover any square to read the pair."; });
+  }
+}
+
+/* ==================================================================
    BOOT
    ================================================================== */
 function render() {
   $("#tab-board").setAttribute("aria-selected", S.tab === "board");
   $("#tab-draft").setAttribute("aria-selected", S.tab === "draft");
   $("#tab-leap").setAttribute("aria-selected", S.tab === "leap");
+  $("#tab-matrix").setAttribute("aria-selected", S.tab === "matrix");
   $("#panel-board").hidden = S.tab !== "board";
   $("#panel-draft").hidden = S.tab !== "draft";
   $("#panel-leap").hidden = S.tab !== "leap";
+  $("#panel-matrix").hidden = S.tab !== "matrix";
   if (S.tab === "board") renderBoard();
   else if (S.tab === "draft") renderDraft();
-  else renderLeap();
+  else if (S.tab === "leap") renderLeap();
+  else renderMatrix();
 }
 $("#tab-board").onclick = () => { S.tab = "board"; S.focusSearch = false; render(); };
 $("#tab-draft").onclick = () => { S.tab = "draft"; S.focusSearch = true; render(); };
 $("#tab-leap").onclick = () => { S.tab = "leap"; S.focusSearch = false; render(); };
+$("#tab-matrix").onclick = () => { S.tab = "matrix"; S.focusSearch = false; render(); };
 $("#themeBtn").onclick = () => {
   const cur = document.documentElement.dataset.theme;
   const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
