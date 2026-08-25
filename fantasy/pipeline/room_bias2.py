@@ -8,6 +8,11 @@ sim_env.load(globals())          # BOARDS (leak-free 2025 projections), TEAMS=10
 BUDGET, SPOTS = 200, 15
 b, rep = BOARDS[2025]
 b = b.reset_index(drop=True).copy()
+# Apply the same spread correction the 2026 board uses, so this comparison is
+# against the board that actually ships rather than an uncorrected one.
+_lam = json.load(open("out/research_lambda.json"))
+_anc = b.position.map(rep).astype(float)
+b["proj_blend"] = _anc + (b.proj_blend - _anc) * b.position.map(_lam).astype(float)
 b["vorp"] = b.proj_blend - b.position.map(rep)
 
 cap = dict(QB=3 * TEAMS, RB=5 * TEAMS, WR=6 * TEAMS, TE=2 * TEAMS)

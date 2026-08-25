@@ -21,8 +21,9 @@ that costs games. Everything here is computed against *these* rules.
 any browser, including on a phone at the draft table.
 
 **Rankings** — every draftable player priced in dollars, with projections, tiers, VORP,
-bye weeks, and risk flags. The prices sum to the money in the room: 10 teams × $200 =
-$2,000 on the board, so a player's price is his share of the league's budget.
+bye weeks, and risk flags. Two price columns, because they are two different questions:
+**Value $** is what a player is worth, and **Expect $** is what this room actually paid at
+his positional rank last year. The gap between them is the edge.
 
 **The Leap** — situational calls the price sheet cannot make: who moved up a depth chart,
 whose team lost half its targets, who changed coaches, who was being fed by December, and
@@ -90,6 +91,54 @@ exactly ten kickers and ten defenses at $1 each.
 
 That lands at roughly **28% of your money on quarterbacks, 28% on backs, 36% on receivers,
 7% on tight ends, and 1% on kicker and defense combined.**
+
+#### Corrected: the projections were too timid at the top
+
+A gradient-boosted model predicts a conditional **mean**. That is the right target for one
+player and the wrong one for a market: conditional means shrink toward the population
+average, so the predicted *distribution* comes out narrower than the real one. Over twelve
+seasons the projected QB1-minus-QB12 gap was **96 points where the realised gap is 121**.
+
+The symptom at an auction is a curve with no cliff. The board priced QB6 within a dollar or
+two of QB3, in a room whose quarterback prices fall off a shelf after QB5 ($31 → $20 → $16).
+
+Each position's spread is now rescaled around its own replacement level by a multiplier
+measured from history — QB ×1.17, RB ×1.29, WR ×1.11, TE ×1.10 — and validated
+leave-one-season-out. It cuts the error in points-per-rank at **every** position: QB +4.3,
+RB +4.1, WR +1.8, TE +0.8 points a rank.
+
+This is calibrated to what players actually **score**, not to what this room **pays**.
+Matching the room's quarterback prices would erase the very gap the tool exists to find.
+
+#### Value is not price
+
+Even with correct projections, the board says the top quarterback is worth $54 and this room
+has never paid near that. Both things are true, and printing only one of them makes the board
+useless as a bid guide. So there are two columns:
+
+| | |
+|---|---|
+| **Value $** | Surplus over replacement, scaled to the league's money. What he is worth. |
+| **Expect $** | What this room actually paid at that positional rank in 2025, smoothed monotone. |
+
+The room's own curves, which is where Expect $ comes from:
+
+```
+QB: 42 38 36 35 31 | 20 16 16 13 12 12 12 …   (27 bought)
+RB: 60 60 58 45 43 | 41 40 39 37 36 36 33 …   (40 bought)
+WR: 60 49 49 47 47 | 44 41 37 36 36 30 27 …   (59 bought)
+TE: 27 16 11  8  5 |  4  3  2  1  1  1  1 …   (13 bought)
+```
+
+A first attempt used a single multiplier per position (quarterbacks cost 63¢ on the dollar,
+and so on). It put QB1 correctly at $32 but inflated the top running back to $75 in a room
+whose most expensive back went for $60 — each position has its own *shape*, not just its own
+level, so the rank map replaced it.
+
+One caveat, stated plainly: **this is one season of one league.** It is a forecast of a
+ten-person habit, not a law. 2025's QB1 went for $42, at the top of the $30–35 range the
+league's own members describe as typical, so treat the Expect column's top row as a ceiling
+rather than a centre.
 
 #### Corrected: the price curve used to be far too flat
 
@@ -351,10 +400,10 @@ were worth going into 2025:
 
 | | Paid | Board said | On the dollar |
 |---|---|---|---|
-| QB | 17.9% | 31.5% | **57¢** |
-| TE | 4.2% | 8.0% | **53¢** |
-| WR | 41.6% | 41.3% | 101¢ |
-| RB | 36.3% | 19.2% | **189¢** |
+| QB | 17.9% | 28.4% | **63¢** |
+| TE | 4.2% | 10.1% | **41¢** |
+| WR | 41.6% | 40.1% | 104¢ |
+| RB | 36.3% | 21.3% | **170¢** |
 
 The biggest bargains in the room were quarterbacks — Goff at $9 against $41 of value,
 Mayfield at $12 against $42. **All eight of the biggest overpays were running backs**:
@@ -368,7 +417,7 @@ bidding against rather than a rule imported from somewhere else.
 
 Note what the pricing fix did to this table. Under the old flat curve the room read as
 overpaying receivers by 11% as well; with replacement drawn correctly, receivers come out
-at **101¢ — essentially fair** — and the whole distortion resolves to two positions. The
+at **104¢ — essentially fair** — and the whole distortion resolves to two positions. The
 conclusion got sharper, not softer, which is the useful kind of correction.
 
 The Auction Room starts from these ratios and shrinks toward tonight's sales as they
@@ -402,7 +451,9 @@ python load.py                  # LOAD, and the price-held-fixed control
 python corrmatrix.py            # the 40-metric correlation matrix
 python standouts.py             # the corners of the price-vs-LOAD chart
 python playergrid.py            # the player-by-metric grid
+python decompress.py            # fit the per-position spread correction (run before the board)
 python price_shape2.py          # check the price curve against the room's own sheet
+python expected_price.py        # value vs what this room actually pays
 python build_app.py             # emit the app
 ```
 

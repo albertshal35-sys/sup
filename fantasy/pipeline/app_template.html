@@ -548,7 +548,9 @@ const COLS = [
   { k: "flr", t: "Floor 25", cls: "num", w: p => p.flr },
   { k: "spk", t: "Spike 25", cls: "num", w: p => p.spk },
   { k: "ghst", t: "Blank 25", cls: "num", w: p => p.ghst },
-  { k: "auc", t: "Value $", cls: "num", w: p => p.auc }
+  { k: "auc", t: "Value $", cls: "num", w: p => p.auc },
+  { k: "exp", t: "Expect $", cls: "num", w: p => p.exp },
+  { k: "edge", t: "Edge", cls: "num", w: p => (p.exp == null ? null : p.auc - p.exp) }
 ];
 
 function renderBoard() {
@@ -577,6 +579,9 @@ function renderBoard() {
         actually starts somewhere, flex included — scaled so the room's whole budget is accounted for. The
         dollars on this page sum to the dollars in the league, and the ${DATA.players.filter(p => p.auc === 1).length} men with no surplus
         left cost a dollar, which is what they cost in a real room too.
+        <strong>Value $</strong> is what he is worth; <strong>Expect $</strong> is what this room actually paid at
+        his positional rank last year. The gap between them is the whole game — a quarterback worth $54 who goes
+        for $42 is the trade, and a back worth $49 who goes for $60 is the one to let someone else make.
         Change the team count in the Auction Room and the ceilings follow, but the printed prices are built for
         a ${DATA.meta.teams}-team room.
         Projections come from gradient-boosted models trained on every player season from 1999 to 2025
@@ -673,6 +678,13 @@ function renderBoard() {
                 <td class="num" style="${p.ghst != null && p.ghst > 0.2 ? "color:var(--danger)" : ""}">${p.ghst == null ? "—" : fmt(p.ghst * 100) + "%"}</td>
                 <td class="num" style="font-weight:700">${p.auc > 0 ? "$" + p.auc : "—"}
                   <span class="vbar" style="width:${Math.max(0, p.auc / maxV * 44)}px"></span></td>
+                <td class="num" style="color:var(--muted)"
+                    title="What this room paid at his positional rank in 2025">${p.exp == null ? "—" : "$" + p.exp}</td>
+                <td class="num" title="Value minus expected price. Positive means this room is likely to let him go cheap."
+                    style="font-weight:${p.exp != null && Math.abs(p.auc - p.exp) >= 10 ? 700 : 400};${
+                  p.exp == null ? "" : (p.auc - p.exp) >= 8 ? "color:var(--accent)"
+                    : (p.auc - p.exp) <= -8 ? "color:var(--danger)" : ""}"
+                  >${p.exp == null ? "—" : (p.auc - p.exp > 0 ? "+" : "") + (p.auc - p.exp)}</td>
                 <td class="l">${(p.flags || []).map(f => `<span class="flag ${flagClass(f)}">${f}</span>`).join("")}</td>
               </tr>`).join("")}
           </tbody>
@@ -823,6 +835,27 @@ function renderFindings() {
     </table></div>
     <p class="hint" style="margin-top:.4rem">Players priced at a dollar: this room ${R.priceshape.at1_room},
       old board ${R.priceshape.at1_old}, now ${R.priceshape.at1_new}.</p>
+  </div>
+
+  <div class="finding" style="border-top-color:var(--danger)">
+    <p class="eyebrow" style="color:var(--danger)">Corrected — the model was too timid at the top</p>
+    <div class="bignum">96 → 112</div>
+    <p>A gradient-boosted model predicts a conditional <em>mean</em>. That is right for one player and wrong for a
+    market: conditional means shrink toward the average, so the predicted spread comes out narrower than the real
+    one. Across twelve seasons the projected QB1-minus-QB12 gap was 96 points where the realised gap is 121, and
+    the symptom at an auction was a curve with no cliff — the board priced QB6 within a dollar or two of QB3 in a
+    room that pays half as much for him.</p>
+    <p>Each position's spread is now rescaled around its own replacement level, by a multiplier measured from
+    history and validated leave-one-season-out. It cuts the error in points-per-rank at
+    <em>every</em> position: QB +4.3, RB +4.1, WR +1.8, TE +0.8 points a rank.</p>
+    <dl class="kv">
+      <dt>QB spread ×</dt><dd class="num">1.17</dd>
+      <dt>RB spread ×</dt><dd class="num">1.29</dd>
+      <dt>WR spread ×</dt><dd class="num">1.11</dd>
+      <dt>TE spread ×</dt><dd class="num">1.10</dd>
+    </dl>
+    <p class="hint" style="margin-top:.4rem">Calibrated to what players actually score, not to what this room
+      pays. Matching the room's quarterback prices would erase the very gap the tool exists to find.</p>
   </div>
 
   <div class="finding">

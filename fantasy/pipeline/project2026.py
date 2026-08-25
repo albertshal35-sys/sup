@@ -202,7 +202,39 @@ def replacement_levels(b):
 
 
 rep, taken = replacement_levels(board)
-print("\nreplacement levels (2026 projections):", {k: round(v, 1) for k, v in rep.items()})
+
+# ---------------------------------------------------------------- undo shrinkage
+# A gradient-boosted model predicts a conditional MEAN, which is the right target
+# for one player and the wrong one for a market: conditional means are shrunk toward
+# the population mean, so the predicted distribution comes out narrower than the real
+# one. Over twelve seasons the projected QB1-minus-QB12 gap is 96 points where the
+# realised gap is 121, and the visible symptom is a curve with no cliff — the board
+# priced QB6 at $39 in a room whose QB6 goes for $20.
+#
+# Rescale each position's spread around its replacement level, which holds the bottom
+# of the pool still and stretches the top. The multipliers are measured in
+# decompress.py as realised spread over projected spread, and validated
+# leave-one-season-out: they cut the error in points-by-rank at every position
+# (QB +4.3, RB +4.1, WR +1.8, TE +0.8 points a rank).
+#
+# Calibrated to what players actually SCORE, not to what this room pays. Matching the
+# room's quarterback prices would erase the very gap the tool exists to find.
+try:
+    LAMBDA = json.load(open("out/research_lambda.json"))
+except FileNotFoundError:
+    LAMBDA = dict(QB=1.166, RB=1.293, WR=1.113, TE=1.104)
+    print("research_lambda.json not found — using the last fitted multipliers")
+lam = board.position.map(LAMBDA).astype(float)
+anchor = board.position.map(rep).astype(float)
+board["proj_raw"] = board.proj_total
+board.loc[lam.notna(), "proj_total"] = (
+    anchor + (board.proj_total - anchor) * lam).round(1)[lam.notna()]
+print("\nspread correction applied:", {k: round(v, 3) for k, v in LAMBDA.items()})
+
+# replacement is unchanged by construction (it is the anchor), but recompute so the
+# flex allocation sees the rescaled pool
+rep, taken = replacement_levels(board)
+print("replacement levels (2026 projections):", {k: round(v, 1) for k, v in rep.items()})
 print("starting slots consumed league-wide:", taken)
 board["vorp"] = (board.proj_total - board.position.map(rep)).round(1)
 board["pos_rank"] = board.groupby("position").proj_total.rank(ascending=False, method="first").astype(int)

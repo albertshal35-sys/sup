@@ -26,10 +26,13 @@ CORR = json.load(open("out/research_corr.json"))
 STAND = json.load(open("out/research_standouts.json"))
 GRID = json.load(open("out/research_grid.json"))
 PSHAPE = json.load(open("out/research_priceshape.json"))
+EXPJ = json.load(open("out/research_expected.json"))
+EXPP = pd.read_parquet("out/expected_price.parquet")
 LOADP = pd.read_parquet("out/load.parquet")
 LOADP = LOADP[LOADP.season == 2026][["player_id", "LOAD", "load_raw", "lift_raw",
                                      "role_opp", "opp_prev", "depth"]]
 board = board.merge(LOADP, on="player_id", how="left")
+board = board.merge(EXPP, on="player_id", how="left")
 
 # ---------------------------------------------------------------- positional premium
 # Decision rule, fixed before looking at the confirmation run: apply a wide receiver
@@ -117,6 +120,7 @@ for _, r in board.iterrows():
         age=clean(r.age26, 1), ppg=clean(r.proj_ppg, 1), g=clean(r.proj_g, 1),
         pts=clean(r.proj_total, 1), vorp=clean(r.vorp, 1),
         tier=int(r.tier), posRank=int(r.pos_rank), auc=int(r.auction),
+        exp=(None if pd.isna(r.get("expected")) else int(r.get("expected"))),
         load=clean(r.get("LOAD"), 0), liftRaw=clean(r.get("lift_raw"), 1),
         role=clean(r.get("role_opp"), 1), oppPrev=clean(r.get("opp_prev"), 1),
         depth=(None if pd.isna(r.get("depth")) else int(r.get("depth"))),
@@ -243,6 +247,7 @@ RESEARCH["corr"] = dict(
 RESEARCH["standouts"] = STAND
 RESEARCH["grid"] = GRID
 RESEARCH["priceshape"] = PSHAPE
+RESEARCH["expected"] = EXPJ
 print("matrix:", len(CORR["labels"]), "metrics |", len(CORR["dupes"]), "duplicate pairs |",
       len(STAND["scatter"]), "scatter points |", len(GRID["rows"]), "grid rows")
 
@@ -267,12 +272,17 @@ print("breakout picks:", len(RESEARCH["breakout"]["picks"]),
       "| fades:", len(RESEARCH["breakout"]["fades"]),
       "| sos rows:", len(RESEARCH["breakout"]["sos"]))
 
+# One source for the room read. expected_price.py prices the 2025 sheet with the
+# identical function the 2026 board uses, so its ratios are the like-for-like ones;
+# room_bias2.py works off a slightly different pool and was landing 6c apart, which
+# is no way to print two numbers that claim to measure the same thing.
 RESEARCH["room"] = dict(
-    ratio={p: v["ratio"] for p, v in ROOM.items()},
-    room_pct={p: v["room_pct"] for p, v in ROOM.items()},
-    fair_pct={p: v["fair_pct"] for p, v in ROOM.items()},
+    ratio=EXPJ["ratio"],
+    room_pct=EXPJ["room_share"],
+    fair_pct=EXPJ["board_share"],
+    curve=EXPJ["curve"], bought=EXPJ["bought"],
     season=2025)
-print("room read (¢ on the dollar, 2025):", {p: round(v["ratio"] * 100) for p, v in ROOM.items()})
+print("room read (¢ on the dollar, 2025):", {p: round(v * 100) for p, v in EXPJ["ratio"].items()})
 RESEARCH["waa"] = dict(
     acc_waa=WAAJ["acc_waa"], acc_pts=WAAJ["acc_pts"],
     win_waa=WAAJ["wins"], win_pts=WAAJ["points"], diff=WAAJ["diff"], se=WAAJ["se"])
